@@ -46,10 +46,6 @@ uploads/
 tmp/
 cache/
 session/
-*.pdf
-*.xlsx
-*.xls
-*.csv
 
 # ==========================================
 # REACT / FRONTEND (Create React App or Vite)
