@@ -1,0 +1,122 @@
+# ==========================================
+# FLASK / PYTHON BACKEND
+# ==========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+instance/
+.env
+.env.*
+*.sqlite3
+*.db
+*.log
+*.pid
+*.bak
+*.swp
+.DS_Store
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+pip-wheel-metadata/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+*.pyc
+
+# Flask-specific
+*.pem
+*.crt
+*.key
+config.json
+certs/
+uploads/
+tmp/
+cache/
+session/
+*.pdf
+*.xlsx
+*.xls
+*.csv
+
+# ==========================================
+# REACT / FRONTEND (Create React App or Vite)
+# ==========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Build output
+build/
+dist/
+.cache/
+.tmp/
+coverage/
+*.tsbuildinfo
+
+# React env files
+frontend/.env
+frontend/.env.local
+frontend/.env.development
+frontend/.env.production
+frontend/.env.test
+
+# ==========================================
+# COMMON IGNORE RULES
+# ==========================================
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+Thumbs.db
+.DS_Store
+ehthumbs.db
+desktop.ini
+
+# ==========================================
+# DEPLOYMENT / PACKAGING
+# ==========================================
+*.tar.gz
+*.zip
+*.tgz
+*.tar
+*.gz
+
+# ==========================================
+# JUPYTER / DATA ANALYSIS (optional if used)
+# ==========================================
+.ipynb_checkpoints/
+*.ipynb
+notebooks/
+data/
+*.npy
+*.npz
+
+# ==========================================
+# SSL / CERTIFICATES
+# ==========================================
+key.pem
+cert.pem
+ssl/

@@ -1,0 +1,1076 @@
+from flask import Flask, Response, jsonify, request, session, make_response
+from flask_cors import CORS
+from flask_session import Session
+import networkx as nx
+from networkx.readwrite import json_graph
+import json, os, time, random, fitz, logging, sys, io, csv
+from copy import deepcopy
+import pandas as pd
+import numpy as np
+from datetime import datetime
+from io import BytesIO
+from collections import defaultdict
+
+logging.basicConfig(
+    filename='JBAM_logs.log',
+    filemode='a',
+    format='%(message)s',
+    level=logging.INFO
+)
+def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+sys.excepthook = log_uncaught_exceptions
+
+app = Flask(__name__)
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_FILE_DIR'] = 'flask_session'
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = False
+app.config['PASSWORD'] = 'happy'
+app.secret_key = '2' # update if cookies are stale
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    if data and data.get("password") == app.config['PASSWORD']:
+        session['authenticated'] = True
+        return jsonify({"status": "Logged in"})
+    else:
+        return jsonify({"error": "Invalid password"}), 401
+
+# Protect API endpoints
+@app.before_request
+def require_auth():
+    # Allow login and static file routes (adjust if necessary)
+    if request.path == '/api/login' or request.path.startswith('/static'):
+        return
+    if request.path.startswith('/api/'):
+        if not session.get('authenticated'):
+            return jsonify({"error": "Not authorized"}), 401
+
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://publicationexplorer.com"]}})
+Session(app)
+G = nx.DiGraph()
+part_db = []
+system_tags = []
+
+
+
+# A tiny Union–Find (Disjoint‐Set) for part‐UIDs:
+class UnionFind:
+    def __init__(self):
+        self.parent = {}
+        self.rank = {}
+
+    def make_set(self, x):
+        if x not in self.parent:
+            self.parent[x] = x
+            self.rank[x] = 0
+
+    def find(self, x):
+        # path compression
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x, y):
+        rootx = self.find(x)
+        rooty = self.find(y)
+        if rootx == rooty:
+            return False
+        # union by rank
+        if self.rank[rootx] < self.rank[rooty]:
+            self.parent[rootx] = rooty
+        elif self.rank[rootx] > self.rank[rooty]:
+            self.parent[rooty] = rootx
+        else:
+            self.parent[rooty] = rootx
+            self.rank[rootx] += 1
+        return True
+
+def find(lst, key, value):
+    for i, dic in enumerate(lst):
+        if dic[key] == str(value):
+            return i
+    return -1
+
+def share_element(A,B):
+    return bool(set(A) & set(B))
+
+def unique_ones(matrix):
+    row_count = np.sum(matrix, axis=1, keepdims=True)
+    col_count = np.sum(matrix, axis=0, keepdims=True)
+    mask = (matrix == 1) & ((row_count == 1) | (col_count == 1))
+    return mask.astype(int)
+
+def build_partdb(file):
+    global part_db, system_tags
+    sheets = pd.ExcelFile(file).sheet_names
+    df = pd.DataFrame()
+    # Iterate through sheets and merge into df
+    for sheet in sheets:
+        df = pd.concat([df, pd.read_excel(file, sheet_name=sheet)])
+    # Any item without a name is removed
+    df = df.dropna(subset='Description')
+    df.reset_index(drop=True, inplace=True)
+    # Just for tracking
+    empty_parts, defined_parts = 0,0
+    for _, row in df.iterrows():
+        part_id = str(row['Product Code'])
+        part_name = row['Description']
+        part_tags = row['Tags'].strip().split(',') if 'Tags' in df.columns and not pd.isna(row['Tags']) else []
+        part_alias = None
+        add_part = []
+        slot_list = []
+        for j in range(1, 31):
+            rowname = 'slot' + str(j)
+            if rowname in df.columns and not pd.isna(row[rowname]):
+                if row[rowname].startswith('Alias'):
+                    part_alias = row[rowname].split(':')[-1]
+                    continue
+                elif row[rowname].startswith('AddPart'):
+                    add_part.append(row[rowname].split(':')[-1])
+                    continue
+                else:
+                    # Uncomment below to debug failed partdb load
+                    #print(row[rowname])
+                    slot_fields = row[rowname].split(':')
+                    slot_name = slot_fields[0]
+                    slot_min = int(slot_fields[1])
+                    slot_max = int(slot_fields[2])
+                    slot_type = 'Host' if slot_fields[-1] == 'H' else 'Plug'
+                    slot_list.append({
+                        'Name': slot_name,
+                        'Min': slot_min,
+                        'Max': slot_max,
+                        'Type': slot_type
+                    })
+
+        part_db.append({
+            'Name': part_name,
+            'ID': part_id,
+            'Slots': slot_list,
+            'Alias': part_alias,
+            'AddPart': ','.join(add_part),
+            'Tags': part_tags
+        })
+        if not slot_list and not part_alias and part_name:
+            empty_parts += 1
+        else:
+            defined_parts += 1
+
+    # Resolve aliases
+    for part in part_db:
+        if part['Alias']:
+            alias_part = next((d for d in part_db if d['ID'] == part['Alias']), None)
+            if alias_part:
+                part['Slots'] = part['Slots'] + alias_part['Slots']
+                part['AddPart'] = alias_part['AddPart']
+            part['Alias'] = None
+
+    # System tags
+    print('Defined parts: {}, undefined parts: {}'.format(str(defined_parts),str(empty_parts)))
+    system_tags = pd.read_excel('SystemTags.xlsx')
+
+def extract_from_pdf(pdf_input):
+
+    ext = os.path.splitext(pdf_input.filename.lower())[1]
+    if ext in {".xls", ".xlsx"}:
+        raw = pdf_input.read()          # read stream once
+        pdf_input.seek(0)               # rewind so caller can re-use
+
+        # Excel-as-HTML → read the first table
+        tables = pd.read_html(BytesIO(raw))
+        if not tables:
+            raise ValueError("No table found in uploaded quote file.")
+        df = tables[0].iloc[:, :3]        # take first three columns
+        df.columns = ["Item_Num", "Description", "QTY"]
+
+        # clean-up
+        df = df.dropna(subset=["Item_Num"])
+        df["QTY"] = df["QTY"].fillna(1).astype(int)
+
+        parsed_items = []
+        for _, row in df.iterrows():
+            for _ in range(row["QTY"]):
+                uid = session['next_uid']; session['next_uid'] += 1
+                session['active_status'][uid] = True
+                parsed_items.append({
+                    "ID": str(row["Item_Num"]),
+                    "Description": str(row["Description"]),
+                    "active": True,
+                    "uid": uid
+                })
+        return parsed_items
+
+    # PDF Parse
+    data = []
+    if isinstance(pdf_input, str):
+        with open(pdf_input, 'rb') as f:
+            file_bytes = f.read()
+    else:
+        pdf_input.seek(0)  # Ensure you're at the start of the file
+        file_bytes = pdf_input.read()
+    datetime_object = datetime.fromtimestamp(time.time())
+    session['Notebook'] = []
+    try:
+        txt = 'Opened PDF: {}'.format(pdf_input.filename)
+        session['Notebook'].append(txt)
+        logging.info('[{}] Session {} opened {}'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:],pdf_input.filename))
+    except:
+        pass
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    for page in doc:
+        startflag = False
+        text_blocks = page.get_text_blocks()
+        for block in text_blocks:
+            text = block[4]
+            if "E&I Cooperative Agreement" in text:
+                break
+
+            if startflag:
+                if "SUBTOTAL" not in str(block[0]):
+                    tmp = text.split("\n")
+                    tmp = [x for x in tmp if x.strip() != "*"]
+                    if tmp and tmp[0].isnumeric():
+                        data.append(tmp)
+
+            if "QTY\nPRODUCT #" in text:
+                startflag = True
+
+    df = pd.DataFrame(
+        {
+            "QTY": [int(x[0]) for x in data],
+            "Item_Num": [x[1] for x in data],
+            "Description": [x[2] for x in data],
+        }
+    )
+    # Add a MISC node
+    df = pd.concat([
+        df,
+        pd.DataFrame({
+            "QTY": [1],
+            "Item_Num": ['MISC'],
+            "Description": ['N/A']
+        })
+    ])
+
+    parsed_items = []
+    for _, row in df.iterrows():
+        for _ in range(int(row["QTY"])):
+            uid = session['next_uid']
+            session['next_uid'] += 1
+            session['active_status'][uid] = True
+            parsed_items.append({
+                "ID": str(row["Item_Num"]),
+                "Description": str(row["Description"]),
+                "active": True,
+                "uid": uid
+            })
+    return parsed_items
+
+def check_slots():
+    empty_slots = 0
+    open_slot_nodes = []
+    available_slot_nodes = []
+    verbose_error = []
+    for part in session['quote_network']:
+        part_error = ''
+        for slot in part['Slots']:
+            if len(slot['Status']) < int(slot['Min']):
+                if not part_error:
+                    part_error += part['Name'] + ' is missing '
+                empty_slots += 1
+                open_slot_nodes.append(part['Name'])
+                part_error += slot['Name'] + ' '
+            if len(slot['Status']) < int(slot['Max']):
+                available_slot_nodes.append(part['Name'])
+        if part_error:
+            verbose_error.append(part_error)
+    return empty_slots, list(set(open_slot_nodes)), list(set(available_slot_nodes)), verbose_error
+
+def process_addpart(item, parent_uid):
+    if not item.get('AddPart'):
+        return
+
+    ghost_ids = item['AddPart'].split(',')
+    for idx, ghost_id in enumerate(ghost_ids):
+        ghost_uid = f"ghost-{parent_uid}-{idx}"
+        # Deep-copy the part from the part database.
+        tmp_part = find(part_db, 'ID', ghost_id)
+        if tmp_part != -1:
+            ghost_part = deepcopy(part_db[tmp_part])
+        else:
+            ghost_part = {'ID': ghost_id,
+                'Name': ghost_id +' - NOT IN DB',
+                'Slots': [],
+                'Alias': None,
+                'AddPart': None,
+                'Tags': []}
+            print('Missing Part:' + ghost_id)
+        # Update name and add ghost properties.
+        ghost_part['Name'] += " " + str(len(session['quote_network']))
+        ghost_part['GhostPart'] = True
+        ghost_part['uid'] = ghost_uid
+
+        # Ensure active status is set.
+        if ghost_uid not in session['active_status']:
+            session['active_status'][ghost_uid] = True
+        ghost_part['active'] = session['active_status'][ghost_uid]
+
+        # Add the ghost part to the network.
+        session['quote_network'].append(ghost_part)
+
+        # Recursively process any AddPart for this ghost part.
+        process_addpart(ghost_part, ghost_uid)
+
+from itertools import combinations
+
+def update_graph():
+    global part_db,system_tags
+    session['quote_network'] = []
+    session['warnings_list'] = []
+    session['graph'] = []
+    G.clear()
+
+    # Skip all parts with this tag in initial connection pass
+    exclude_tags = ['Interlock','LaserSafety','NiLayer','Triggering','BNC']
+    # Need to check each of these for total connection
+    check_tags = ['LaserSafety','NiLayer','Triggering']
+
+    # Custom arrows for visualization
+    custom_arrows = {'InterlockPhone':'InterlockPhone.svg','InterlockRound':'InterlockRound.svg','InterlockPhoneLSC':'InterlockPhone.svg','InterlockRoundLSC':'InterlockRound.svg','InterlockPlug':'InterlockPlug.svg','InterlockLUNF':'InterlockLUNF.svg','BNC':'BNC.svg','BNCBB':'BNC.svg'}
+    
+    # Assign each line item a unique id
+    for line_item in session['quote_list']:
+        if "uid" not in line_item:
+            line_item["uid"] = session['next_uid']
+            session['next_uid'] += 1
+            session['active_status'][line_item["uid"]] = True
+        # Build out the base part
+        loc = find(part_db, "ID", line_item["ID"])
+        if loc != -1:
+            tmp_item = deepcopy(part_db[loc])
+            line_item['Description'] = tmp_item['Name']
+        else:
+            tmp_item = {
+                'ID': line_item["ID"],
+                'Name': line_item['Description'],
+                'Slots': [],
+                'Alias': None,
+                'AddPart': None,
+                'Tags': []
+            }
+
+        # Make unique name so they appear on front end as individual items
+        tmp_item['Name'] += " " + str(line_item['uid'])
+        tmp_item['GhostPart'] = False
+        tmp_item['active'] = session['active_status'].get(line_item["uid"], True)
+        tmp_item['uid'] = line_item['uid']
+
+        # Add part to quote network
+        session['quote_network'].append(tmp_item)
+
+        # If the part spawns ghost items
+        if tmp_item.get('AddPart'):
+            process_addpart(tmp_item, line_item['uid'])
+
+    # Custom slots added by user
+    if 'custom_slots' in session:
+        for custom in session['custom_slots']:
+            for part in session['quote_network']:
+                if part['ID'] == custom['ID']:
+                    slot_parts = custom['slot'].split(':')
+                    if len(slot_parts) == 4:
+                        slot_name = slot_parts[0]
+                        slot_min = int(slot_parts[1])
+                        slot_max = int(slot_parts[2])
+                        slot_type = 'Host' if slot_parts[3].upper() == 'H' else 'Plug'
+                        # Append the custom slot if it does not already exist.
+                        if not any(s['Name'].lower() == slot_name.lower() for s in part.get('Slots', [])):
+                            part['Slots'].append({
+                                'Name': slot_name,
+                                'Min': slot_min,
+                                'Max': slot_max,
+                                'Type': slot_type
+                            })
+                    break
+
+    # Initialize all slot statuses as empty
+    for i in range(len(session['quote_network'])):
+        for j in range(len(session['quote_network'][i]['Slots'])):
+            session['quote_network'][i]['Slots'][j]['Status'] = []
+    
+    # Add all nodes to front end graph
+    for item in session['quote_network']:
+        G.add_node(item["Name"])
+
+    # Transform quote network into slot list
+    slot_list = []
+    for i,item in enumerate(session['quote_network']):
+        slot_list += [{'Index':i,'Name':x['Name'],'GhostPart':item['GhostPart'],'Min':x['Min'],'Max':x['Max'],'Type':x['Type'],'Loc':j} for j,x in enumerate(item['Slots'])]
+    n = len(slot_list)
+
+    # Empty matrices. Score, singletons and distance between parts. We connect singletons, then by decreasing score then by increasing distance.
+    conn_score = np.zeros((n, n))
+    singletons = np.zeros((n, n))
+    conn_distance = np.zeros((n, n))
+
+    # Determine scores, singletons and distances
+    for i in range(n):
+        for j in range(i + 1, n):
+            # Skip shared tags between slots
+            if set(session['quote_network'][slot_list[i]['Index']]['Tags']).intersection(set(exclude_tags)).intersection(set(session['quote_network'][slot_list[j]['Index']]['Tags']).intersection(set(exclude_tags))):
+                continue
+            # Skip LaserSafety and Interlock tagged slots (when BOTH slots have either of these tags)
+            if set(['Interlock','LaserSafety']).intersection(session['quote_network'][slot_list[i]['Index']]['Tags']) and set(['Interlock','LaserSafety']).intersection(session['quote_network'][slot_list[j]['Index']]['Tags']):
+                continue
+            # Skip BNC and Triggering tagged slots (when BOTH slots have either of these tags)
+            if set(['BNC','Triggering']).intersection(session['quote_network'][slot_list[i]['Index']]['Tags']) and set(['BNC','Triggering']).intersection(session['quote_network'][slot_list[j]['Index']]['Tags']):
+                continue
+            if slot_list[i]['Index'] != slot_list[j]['Index']:
+                conn_score[i][j] = 1
+                # Check 1: submin on either slot
+                if slot_list[i]['Min'] > 0 and slot_list[j]['Min'] > 0:
+                    conn_score[i][j] += 6
+                elif slot_list[i]['Min'] > 0 or slot_list[j]['Min'] > 0:
+                    conn_score[i][j] += 3
+                # Check 2: ghost part
+                if slot_list[i]['GhostPart'] == False and slot_list[j]['GhostPart'] == False:
+                    conn_score[i][j] += 2
+                elif slot_list[i]['GhostPart'] == False or slot_list[j]['GhostPart'] == False:
+                    conn_score[i][j] += 1
+                    
+                if set(slot_list[i]["Name"].split('|')).intersection(set(slot_list[j]["Name"].split('|'))) and slot_list[i]['Type'] != slot_list[j]['Type']:
+                    singletons[i][j] = 1
+                conn_distance[i][j] = abs(slot_list[i]['Index']-slot_list[j]['Index'])
+
+    # Adding 10 points here is sufficient to make singletons the first to connect
+    conn_score = conn_score + unique_ones(singletons) * 10
+
+    # Form slot pairs based on priority
+    indices = np.indices(conn_score.shape).reshape(2, -1).T
+    filtered_indices = [idx for idx in indices if conn_score[idx[0], idx[1]] > 0]
+    sorted_indices = sorted(filtered_indices, key=lambda idx: (-conn_score[idx[0], idx[1]], conn_distance[idx[0], idx[1]]))
+    sorted_list = [list(idx) for idx in sorted_indices]
+    
+    # Pass 1: connect all parts without tags indicated by exclude_tags
+    for pair in sorted_list:
+        slot1 = session['quote_network'][slot_list[pair[0]]['Index']]['Slots'][slot_list[pair[0]]['Loc']]
+        slot2 = session['quote_network'][slot_list[pair[1]]['Index']]['Slots'][slot_list[pair[1]]['Loc']]
+        part1 = session['quote_network'][slot_list[pair[0]]['Index']]
+        part2 = session['quote_network'][slot_list[pair[1]]['Index']]
+
+        # Ensure we don't create a repeated connection
+        part1uid = [item for sublist in [x['Status'] for x in part1['Slots']] for item in sublist]
+        part2uid = [item for sublist in [x['Status'] for x in part2['Slots']] for item in sublist]
+        if part1['uid'] in part2uid or part2['uid'] in part1uid:
+            continue
+
+        if set(slot1["Name"].split('|')).intersection(set(slot2["Name"].split('|'))) and slot1['Type'] != slot2['Type'] and len(slot1['Status']) < int(slot1['Max']) and len(slot2['Status']) < int(slot2['Max']) and part1['active'] and part2['active']:
+            # This is a directed graph, so we always connect from Host to Plug
+            if slot1['Type'] == 'Host':
+                G.add_edge(part1["Name"], part2["Name"])
+            else:
+                G.add_edge(part2["Name"], part1["Name"])
+            
+            # Add part uid to status
+            slot1["Status"].append(part2['uid'])
+            slot2["Status"].append(part1['uid'])
+
+        # Pass 2: Try permutations to validate networks formed by check_tags
+    for tag in check_tags:
+        interlock_pairs = []
+
+        # Filter parts relevant to this tag
+        tag_set = {'LaserSafety', 'Interlock'} if tag == "LaserSafety" else {'Triggering', 'BNC'} if tag == "Triggering" else {tag}
+        interlock_parts = [x for x in session['quote_network'] if set(x['Tags']).intersection(tag_set)]
+
+        # Precompute slot indices and tags for each slot
+        slot_info = [
+            (
+                i,
+                slot_list[i],
+                session['quote_network'][slot_list[i]['Index']],
+                set(session['quote_network'][slot_list[i]['Index']]['Tags']),
+                set(slot_list[i]['Name'].split('|'))
+            )
+            for i in range(n)
+        ]
+
+        for i in range(n):
+            idx1, slot1, part1, tags1, names1 = slot_info[i]
+            for j in range(i + 1, n):
+                idx2, slot2, part2, tags2, names2 = slot_info[j]
+                if part1 is not part2 and names1.intersection(names2):
+                    if tag == 'LaserSafety':
+                        if {'LaserSafety', 'Interlock'}.intersection(tags1) and {'LaserSafety', 'Interlock'}.intersection(tags2):
+                            interlock_pairs.append([i, j])
+                    elif tag == 'Triggering':
+                        if {'Triggering', 'BNC'}.intersection(tags1) and {'Triggering', 'BNC'}.intersection(tags2):
+                            interlock_pairs.append([i, j])
+                    elif tag in tags1 and tag in tags2:
+                        interlock_pairs.append([i, j])
+
+        best_perm = interlock_pairs
+        perms = 1000
+
+        interlock_graph = nx.Graph()
+        i_nodes = set()
+
+        for part in interlock_parts:
+            node_name = 'I_' + part['Name'] if tag in part['Tags'] else part['Name']
+            interlock_graph.add_node(node_name)
+            if node_name.startswith('I_'):
+                i_nodes.add(node_name)
+
+        i_nodes = list(i_nodes)
+        valid_network = False
+
+        quote_network_base = deepcopy(session['quote_network'])  # base copy once, reuse
+        for _ in range(perms):
+            random.shuffle(interlock_pairs)
+            interlock_graph.remove_edges_from(list(interlock_graph.edges))
+            quote_network_tmp = deepcopy(quote_network_base)
+
+            for pair in interlock_pairs:
+                s1, s2 = slot_list[pair[0]], slot_list[pair[1]]
+                part1 = quote_network_tmp[s1['Index']]
+                part2 = quote_network_tmp[s2['Index']]
+                slot1 = part1['Slots'][s1['Loc']]
+                slot2 = part2['Slots'][s2['Loc']]
+
+                uid1 = part1['uid']
+                uid2 = part2['uid']
+                uids1 = part1['Slots']
+                uids2 = part2['Slots']
+
+                if uid1 in [u for slot in uids2 for u in slot['Status']] or uid2 in [u for slot in uids1 for u in slot['Status']]:
+                    continue
+
+                if slot1['Type'] != slot2['Type'] and len(slot1['Status']) < int(slot1['Max']) and len(slot2['Status']) < int(slot2['Max']) and part1['active'] and part2['active']:
+                    slot1["Status"].append(uid2)
+                    slot2["Status"].append(uid1)
+                    n1 = part1["Name"] if part1["Name"] in interlock_graph else 'I_' + part1["Name"]
+                    n2 = part2["Name"] if part2["Name"] in interlock_graph else 'I_' + part2["Name"]
+                    interlock_graph.add_edge(n1, n2)
+
+            if len(i_nodes) > 1:
+                connected = nx.node_connected_component(interlock_graph, i_nodes[0])
+                if all(n in connected for n in i_nodes):
+                    valid_network = True
+                    best_perm = interlock_pairs[:]
+                    break
+            else:
+                valid_network = True
+                break
+
+        if not valid_network:
+            session['warnings_list'].append(f'{tag} not valid')
+
+        # Final connection using best_perm
+        for pair in best_perm:
+            s1, s2 = slot_list[pair[0]], slot_list[pair[1]]
+            part1 = session['quote_network'][s1['Index']]
+            part2 = session['quote_network'][s2['Index']]
+            slot1 = part1['Slots'][s1['Loc']]
+            slot2 = part2['Slots'][s2['Loc']]
+
+            uid1 = part1['uid']
+            uid2 = part2['uid']
+            uids1 = part1['Slots']
+            uids2 = part2['Slots']
+
+            if uid1 in [u for slot in uids2 for u in slot['Status']] or uid2 in [u for slot in uids1 for u in slot['Status']]:
+                continue
+
+            if tag not in part1['Tags'] and tag not in part2['Tags']:
+                if tag == 'LaserSafety' and 'Interlock' in part1['Tags'] and 'Interlock' in part2['Tags']:
+                    pass
+                else:
+                    continue
+
+            if slot1['Type'] != slot2['Type'] and len(slot1['Status']) < int(slot1['Max']) and len(slot2['Status']) < int(slot2['Max']) and part1['active'] and part2['active']:
+                if slot1['Type'] == 'Host':
+                    slot1, slot2 = slot2, slot1
+                    part1, part2 = part2, part1
+
+                if slot1['Name'] in custom_arrows:
+                    G.add_edge(part2["Name"], part1["Name"], arrows={
+                        "from": {
+                            "enabled": True,
+                            "type": "image",
+                            "src": f"/images/{custom_arrows[slot1['Name']]}",
+                            "scaleFactor": 1,
+                            "imageWidth": 40,
+                            "imageHeight": 40
+                        },
+                        "to": {"enabled": False},
+                    }, arrowStrikethrough=False)
+                else:
+                    G.add_edge(part2["Name"], part1["Name"])
+
+                slot1["Status"].append(part2['uid'])
+                slot2["Status"].append(part1['uid'])
+
+    # System tag checks
+    active_parts = [x for x in session['quote_network'] if x['active']]
+    active_tags = [tag for p in active_parts for tag in p['Tags']]
+    for _, row in system_tags.iterrows():
+        if row['Type'] == 'Require':
+            if all(any(cond.strip() in x['Tags'] for x in active_parts) for cond in row['Condition1'].split(',')) and row['Condition2'] not in active_tags:
+                session['warnings_list'].append(row['Warning'])
+        elif row['Type'] == 'Exclude':
+            if any(row['Condition1'] in x['Tags'] for x in active_parts) and row['Condition2'] in active_tags:
+                session['warnings_list'].append(row['Warning'])
+
+    # Final graph export
+    session['graph'] = json_graph.node_link_data(G)
+    for u, v, edge_data in G.edges(data=True):
+        for link in session['graph']["links"]:
+            if link["source"] == u and link["target"] == v:
+                link.update(edge_data)
+                break
+
+
+def graph_to_json():
+    """
+    Build the merged graph + a sidebar-friendly items list that nests ghosts
+    under their user-added parent(s) with no duplicate top-level rows.
+    """
+    from collections import defaultdict
+
+    # === Build adjacency (already present in your code before merging) ===
+    name_to_data = {nd["Name"]: nd for nd in session["quote_network"]}
+    adjacency_map = {}
+    for u, v in G.edges():
+        adjacency_map.setdefault(u, set()).add(v)
+        adjacency_map.setdefault(v, set()).add(u)
+
+    # === Merge nodes (same as your current approach) ===
+    merge_dict = {}
+    for n in G.nodes():
+        nd = name_to_data.get(n, {})
+        if not nd:
+            continue
+        # Merge key considers ID, ghost flag, active state and neighbors
+        node_name = n
+        key = (
+            nd.get("ID"),
+            nd.get("GhostPart", False),
+            nd.get("active", True),
+            tuple(sorted(adjacency_map.get(n, []))),
+        )
+        if key not in merge_dict:
+            merge_dict[key] = {
+                "representative_name": node_name,
+                "uids": [],
+                "count": 0,
+            }
+        merge_dict[key]["count"] += 1
+        merge_dict[key]["uids"].append(nd.get("uid"))
+
+    merged_nodes = []
+    name_to_rep = {}
+    for merge_key, info in merge_dict.items():
+        rep_name = info["representative_name"]
+        rep_nd = name_to_data[rep_name]
+        # strip trailing index from Name (e.g., "MXA22158 0" -> "MXA22158")
+        label_no_index = rep_nd["Name"].rsplit(" ", 1)[0]
+        count = info["count"]
+        merged_nodes.append({
+            "id": rep_name,
+            "label": label_no_index,
+            "badgeCount": count,
+            "ghost": rep_nd.get("GhostPart", False),
+            "active": rep_nd.get("active", True),
+            "uid": info["uids"],              # list of uids merged here
+            "tags": rep_nd.get("Tags", []),
+        })
+
+        # Map all nodes with same merge_key to rep_name
+        for n in G.nodes():
+            nd = name_to_data.get(n, {})
+            if not nd:
+                continue
+            current_key = (
+                nd.get("ID"),
+                nd.get("GhostPart", False),
+                nd.get("active", True),
+                tuple(sorted(adjacency_map.get(n, []))),
+            )
+            if current_key == merge_key:
+                name_to_rep[n] = rep_name
+
+    # === Merge edges (same as your current approach) ===
+    merged_edges = {}
+    for u, v, edge_data in G.edges(data=True):
+        rep_u = name_to_rep.get(u, u)
+        rep_v = name_to_rep.get(v, v)
+        if rep_u == rep_v:
+            continue
+        key = (rep_u, rep_v)
+        if key not in merged_edges:
+            merged_edges[key] = {"from": rep_u, "to": rep_v}
+            if "arrows" in edge_data:
+                merged_edges[key]["arrows"] = edge_data["arrows"]
+        else:
+            if "arrows" in edge_data and "arrows" not in merged_edges[key]:
+                merged_edges[key]["arrows"] = edge_data["arrows"]
+    merged_edges_list = list(merged_edges.values())
+
+    # === Build ghosts_by_parent from quote_network (ghost-<parent_uid>-<idx>) ===
+    ghosts_by_parent = defaultdict(list)
+    for part in session["quote_network"]:
+        if part.get("GhostPart"):
+            uid = str(part.get("uid", ""))
+            if uid.startswith("ghost-"):
+                bits = uid.split("-")
+                if len(bits) >= 3:
+                    parent_uid = bits[1]
+                    base_name = part.get("Name", "").rsplit(" ", 1)[0]  # strip trailing index
+                    ghosts_by_parent[parent_uid].append({
+                        "id": part.get("ID", ""),
+                        "description": base_name,
+                    })
+
+    # === Count user-added items (by ID) and collect the uids for each ID ===
+    user_counts = {}
+    uids_by_id = defaultdict(list)
+    for p in session["quote_list"]:
+        pid = p["ID"]
+        desc = p["Description"]
+        uid = str(p.get("uid"))
+        if pid not in user_counts:
+            user_counts[pid] = {"count": 0, "desc": desc}
+        user_counts[pid]["count"] += 1
+        uids_by_id[pid].append(uid)
+
+    user_added_ids = set(user_counts.keys())
+
+    # === Build sidebar items: each user-added ID + its ghosts ===
+    merged_items = []
+    for pid, info in user_counts.items():
+        base_desc = info["desc"]
+        final_desc = f"{base_desc} x{info['count']}" if info["count"] > 1 else base_desc
+
+        child_ghosts = []
+        for puid in uids_by_id[pid]:
+            for g in ghosts_by_parent.get(puid, []):
+                # If a ghost ID is also user-added, don't repeat it under the parent.
+                if g["id"] in user_added_ids:
+                    continue
+                child_ghosts.append(g)
+
+        merged_items.append({
+            "id": pid,
+            "description": final_desc,
+            "ghosts": child_ghosts,   # <<— frontend can render directly
+        })
+
+    # === Slot checks / status message (unchanged) ===
+    empty_slots, open_slot_nodes, available_slot_nodes, verbose_error = check_slots()
+    verbose_error = "\n".join(verbose_error)
+    status_message = verbose_error if empty_slots else "All slots filled."
+
+    # === Final payload ===
+    return {
+        "nodes": merged_nodes,
+        "edges": merged_edges_list,
+        "items": merged_items,
+        "open_slot_nodes": list(set(open_slot_nodes)),
+        "available_slot_nodes": list(set(available_slot_nodes)),
+        "status_message": status_message,
+        "warnings": session["warnings_list"],
+    }
+
+
+@app.before_request
+def init_session():
+    if 'quote_network' not in session:
+        global part_db
+        session['quote_network'] = []
+        session['warnings_list'] = []
+        session['next_uid'] = 1
+        session['active_status'] = {}
+        session['graph'] = []
+        session['Notebook'] = []
+        session['quote_list'] = []
+        session['custom_slots'] = []
+        update_graph()
+        logging.info('[{}] Session {} initialized: adding part db'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:]))
+    session.modified = True
+        
+@app.route("/api/graph", methods=["GET"])
+def get_graph():
+    empty_slots, open_slot_nodes, available_slot_nodes, verbose_error = check_slots()
+    verbose_error = ('\n').join(verbose_error)
+    status_message = f"{verbose_error}" if empty_slots else "All slots filled."
+    return jsonify(graph_to_json())
+
+@app.route("/api/add_item", methods=["POST"])
+def add_item():
+    global part_db
+    data = request.json
+    item_id = data.get("item")
+    part_entry = next((part for part in part_db if part["ID"] == item_id), None)
+    if part_entry:
+        desc = part_entry["Name"]
+    else:
+        desc = "Unknown Part"
+
+    new_item = {
+        "ID": item_id,
+        "Description": desc,
+        "active": True,
+        "uid": session['next_uid']
+    }
+    session['active_status'][session['next_uid']] = True
+    session['next_uid'] += 1
+    session['quote_list'].append(new_item)
+    session['Notebook'].append('Added {} - {}'.format(item_id,desc))
+    logging.info('[{}] Session {} added part {}'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:],item_id))
+    update_graph()
+    return jsonify(graph_to_json())
+
+@app.route("/api/remove_item", methods=["POST"])
+def remove_item():
+    data = request.json
+    item_to_remove = data.get("item")
+    found = False
+    new_quote_list = []
+    for item in session['quote_list']:
+        if item["ID"] == item_to_remove and not found:
+            desc = item['Description']
+            found = True
+            continue
+        new_quote_list.append(item)
+    session['quote_list'] = new_quote_list
+    session['Notebook'].append('Removed {} - {}'.format(item_to_remove,desc))
+    logging.info('[{}] Session {} removed part {}'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:],item_to_remove))
+    session.modified = True
+    update_graph()
+    return jsonify(graph_to_json())
+
+@app.route("/api/parts")
+def get_all_parts():
+    global part_db
+    available_parts = [{"id": part["ID"], "description": part["Name"]} for part in part_db]
+    return jsonify(available_parts)
+
+@app.route("/api/load_pdf", methods=["POST"])
+def load_pdf():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+    session['quote_list'] = extract_from_pdf(file)
+    update_graph()
+    return jsonify(graph_to_json())
+
+@app.route("/api/clear", methods=["POST"])
+def clear_quote():
+    try:
+        # session.clear()
+        session['quote_network'] = []
+        session['warnings_list'] = []
+        session['next_uid'] = 1
+        session['active_status'] = {}
+        session['quote_list'] = []
+        session['graph'] = []
+        session['Notebook'] = []
+        session.modified = True
+        update_graph()
+        return jsonify(graph_to_json())
+    except Exception as e:
+        return jsonify({"error": "Failed to clear quote", "message": str(e)}), 500
+
+@app.route("/api/save", methods=["POST"])
+def save_partdb_simple():
+    """
+    Export the current part_db with only Item ID, Description, and Quantity columns.
+    """
+
+    # Get the current part list
+    quote_items = session.get("quote_list", [])
+    if not quote_items:
+        return jsonify({"error": "No items found in session"}), 400
+
+    # Count quantities by item ID
+    quantities = {}
+    for item in quote_items:
+        item_id = item.get("id") or item.get("ID")
+        if item_id:
+            quantities[item_id] = quantities.get(item_id, 0) + 1
+
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Item ID", "Description", "Quantity"])
+
+    for item_id, qty in quantities.items():
+        # find one example to grab the description
+        desc = next(
+            (i.get("Description") or "") for i in quote_items if (i.get("id") or i.get("ID")) == item_id
+        )
+        if item_id == "MISC" and desc == "MISC":
+            continue
+        writer.writerow([item_id, desc, qty])
+
+    # Return downloadable CSV
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=part_list.csv"}
+    )
+
+
+@app.route("/api/suggest_parts", methods=["POST"])
+def suggest_parts():
+    global part_db
+    data = request.json
+    node_name = data.get("node_name")
+    suggestion_type = data.get("suggestion_type", "all parts")
+    node_item = next((x for x in session['quote_network'] if x['Name'] == node_name), None)
+    if not node_item:
+        return jsonify({"suggestions": {}})
+
+    open_slots = []
+    for slot in node_item['Slots']:
+        if suggestion_type == "all parts":
+            if len(slot['Status']) < int(slot['Max']):
+                open_slots.append(slot)
+        elif suggestion_type == "missing parts":
+            if len(slot['Status']) < int(slot['Min']):
+                open_slots.append(slot)
+
+    suggestions_by_slot = {}
+    for open_slot in open_slots:
+        slot_key = open_slot['Name']
+        suggestions_by_slot.setdefault(slot_key, set())
+        open_slot_names = open_slot['Name'].split('|')
+        needed_type = 'Plug' if open_slot['Type'] == 'Host' else 'Host'
+        for part in part_db:
+            for s in part['Slots']:
+                slot_names = s['Name'].split('|')
+                if s['Type'] == needed_type and any(x in slot_names for x in open_slot_names):
+                    suggestions_by_slot[slot_key].add((part['ID'], part['Name']))
+
+    suggestions_by_slot = {
+        k: [{"ID": tup[0], "Name": tup[1]} for tup in suggestions_by_slot[k]]
+        for k in suggestions_by_slot
+    }
+
+    
+    return jsonify({"suggestions": suggestions_by_slot})
+
+@app.route("/api/toggle_item", methods=["POST"])
+def toggle_item():
+    data = request.json
+    uid = data.get("uid")
+    new_state = data.get("active")
+    if uid is None or new_state is None:
+        return jsonify({"error": "Invalid data"}), 400
+
+    if isinstance(uid, list):
+        for u in uid:
+            session['active_status'][u] = new_state
+    else:
+        session['active_status'][uid] = new_state
+    for i, item in enumerate(session.get('quote_list', [])):
+        if str(item.get('uid')) == str(uid[0]):
+            moved_item = session['quote_list'].pop(i)
+            session['quote_list'].append(moved_item)
+            break
+
+    update_graph()
+    return jsonify(graph_to_json())
+
+@app.route("/api/connect_custom", methods=["POST"])
+def connect_custom():
+    data = request.get_json()
+
+    # Extract parameters: source and target node names, and the slot name (e.g., "InterlockLUNF")
+    source_node_name = data.get("source")
+    target_node_name = data.get("target")
+    slot_name = data.get("slot")
+    
+    if not source_node_name or not target_node_name or not slot_name:
+         return jsonify({"error": "Missing parameters", "data": data}), 400
+
+    # Look up nodes by name as in suggest_parts
+    source_node = next((x for x in session['quote_network'] if x['Name'] == source_node_name), None)
+    target_node = next((x for x in session['quote_network'] if x['Name'] == target_node_name), None)
+    if not source_node or not target_node:
+         return jsonify({"error": "Could not find source or target node by name"}), 400
+
+    # Extract the actual part IDs
+    source_id = source_node.get("ID")
+    target_id = target_node.get("ID")
+
+    # Check which node already has a slot with this name
+    source_has_slot = any(s['Name'].lower() == slot_name.lower() for s in source_node.get('Slots', []))
+    target_has_slot = any(s['Name'].lower() == slot_name.lower() for s in target_node.get('Slots', []))
+
+    if not source_has_slot and not target_has_slot:
+         return jsonify({"error": "Neither node has the base slot. Cannot determine complementary type."}), 400
+
+    # Determine base slot type from the node that already has it.
+    base_type = None
+    if source_has_slot:
+         base_slot = next((s for s in source_node.get('Slots', []) if s['Name'].lower() == slot_name.lower()), None)
+         if base_slot:
+              base_type = base_slot.get("Type")  # Expected to be "Host" or "Plug"
+    elif target_has_slot:
+         base_slot = next((s for s in target_node.get('Slots', []) if s['Name'].lower() == slot_name.lower()), None)
+         if base_slot:
+              base_type = base_slot.get("Type")
+    
+    if not base_type:
+         return jsonify({"error": "Base slot type not determined"}), 400
+
+    # Determine complementary type.
+    if base_type.lower() == "host":
+         complementary_type = "Plug"
+         comp_flag = "P"
+    elif base_type.lower() == "plug":
+         complementary_type = "Host"
+         comp_flag = "H"
+    else:
+         return jsonify({"error": "Unknown base slot type"}), 400
+
+    # The complementary slot will use defaults: min=1 and max=1.
+    # Form the custom slot string in the same format as before.
+    custom_slot_str = f"{slot_name}:1:1:{comp_flag}"
+
+    # Identify which node is missing the slot.
+    missing_node_id = None
+    if source_has_slot and not target_has_slot:
+         missing_node_id = target_id
+    elif target_has_slot and not source_has_slot:
+         missing_node_id = source_id
+    else:
+         # If both nodes already have the slot, we don't add anything.
+         return jsonify({"error": "Both nodes already have the slot"}), 400
+
+    # Ensure the custom_slots session variable exists.
+    if "custom_slots" not in session:
+         session["custom_slots"] = []
+
+    # Avoid duplicates: only add if not already present.
+    if not any(cs["ID"] == missing_node_id and cs["slot"].lower() == custom_slot_str.lower() 
+               for cs in session["custom_slots"]):
+         session["custom_slots"].append({"ID": missing_node_id, "slot": custom_slot_str})
+
+    # Rebuild the graph so the new custom slot is appended to the part's slot list.
+    update_graph()
+    return jsonify(graph_to_json())
+
+build_partdb('JBAMdb.xlsx')
+
+if __name__ == "__main__":
+    app.run(threaded=True)
