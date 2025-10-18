@@ -56,7 +56,7 @@ Session(app)
 G = nx.DiGraph()
 part_db = []
 system_tags = []
-
+PREBUILT_FILE = 'prebuilds.xlsx'
 
 
 # A tiny Union–Find (Disjoint‐Set) for part‐UIDs:
@@ -113,9 +113,16 @@ def build_partdb(file):
     # Iterate through sheets and merge into df
     for sheet in sheets:
         df = pd.concat([df, pd.read_excel(file, sheet_name=sheet)])
+
     # Any item without a name is removed
     df = df.dropna(subset='Description')
     df.reset_index(drop=True, inplace=True)
+
+    sf_db = pd.read_excel('productDB.xlsx')  # Salesforce export
+    sf_codes = sf_db['Product Code'].astype(str).unique()
+
+    # Filter JBAMdb based on Salesforce active products
+    df = df[df['Product Code'].astype(str).isin(sf_codes) | df['Product Code'].astype(str).str.startswith('JBAM-')]
     # Just for tracking
     empty_parts, defined_parts = 0,0
     for _, row in df.iterrows():
@@ -176,52 +183,74 @@ def build_partdb(file):
     system_tags = pd.read_excel('SystemTags.xlsx')
 
 def extract_from_pdf(pdf_input):
+    """
+    Parse uploaded quote files.
+    Supports: PDF and CSV (Excel removed).
+    CSV must contain columns: Item ID, Description, Quantity
+    """
 
     ext = os.path.splitext(pdf_input.filename.lower())[1]
-    if ext in {".xls", ".xlsx"}:
-        raw = pdf_input.read()          # read stream once
-        pdf_input.seek(0)               # rewind so caller can re-use
 
-        # Excel-as-HTML → read the first table
-        tables = pd.read_html(BytesIO(raw))
-        if not tables:
-            raise ValueError("No table found in uploaded quote file.")
-        df = tables[0].iloc[:, :3]        # take first three columns
-        df.columns = ["Item_Num", "Description", "QTY"]
+    # === CSV PARSE ===
+    if ext == ".csv":
+        pdf_input.seek(0)
 
-        # clean-up
-        df = df.dropna(subset=["Item_Num"])
-        df["QTY"] = df["QTY"].fillna(1).astype(int)
+        # Infer delimiter (comma, tab, etc.)
+        # engine='python' with sep=None lets pandas sniff the delimiter
+        df = pd.read_csv(pdf_input, sep=None, engine="python")
+
+        # Normalize column names (strip spaces) then require the exact three
+        df.columns = [str(c).strip() for c in df.columns]
+        expected = {"Item ID", "Description", "Quantity"}
+        if not expected.issubset(set(df.columns)):
+            raise ValueError("CSV must contain columns: Item ID, Description, Quantity")
+
+        # Clean and coerce
+        df = df.dropna(subset=["Item ID"])
+        # Default quantity to 1 when missing/blank
+        df["Quantity"] = (
+            df["Quantity"]
+            .apply(lambda x: 1 if (pd.isna(x) or str(x).strip() == "") else x)
+            .astype(int)
+        )
 
         parsed_items = []
         for _, row in df.iterrows():
-            for _ in range(row["QTY"]):
-                uid = session['next_uid']; session['next_uid'] += 1
-                session['active_status'][uid] = True
+            item_id = str(row["Item ID"]).strip()
+            desc = str(row["Description"])
+            qty = int(row["Quantity"])
+            for _ in range(qty):
+                uid = session["next_uid"]
+                session["next_uid"] += 1
+                session["active_status"][uid] = True
                 parsed_items.append({
-                    "ID": str(row["Item_Num"]),
-                    "Description": str(row["Description"]),
+                    "ID": item_id,
+                    "Description": desc,
                     "active": True,
                     "uid": uid
                 })
         return parsed_items
 
-    # PDF Parse
+    # === PDF PARSE === (unchanged)
     data = []
     if isinstance(pdf_input, str):
-        with open(pdf_input, 'rb') as f:
+        with open(pdf_input, "rb") as f:
             file_bytes = f.read()
     else:
-        pdf_input.seek(0)  # Ensure you're at the start of the file
+        pdf_input.seek(0)
         file_bytes = pdf_input.read()
-    datetime_object = datetime.fromtimestamp(time.time())
-    session['Notebook'] = []
+
+    session["Notebook"] = []
     try:
-        txt = 'Opened PDF: {}'.format(pdf_input.filename)
-        session['Notebook'].append(txt)
-        logging.info('[{}] Session {} opened {}'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:],pdf_input.filename))
-    except:
+        session["Notebook"].append(f"Opened PDF: {pdf_input.filename}")
+        logging.info("[{}] Session {} opened {}".format(
+            datetime.now().strftime("%m-%d %H:%M"),
+            session.sid[-4:],
+            pdf_input.filename
+        ))
+    except Exception:
         pass
+
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     for page in doc:
         startflag = False
@@ -241,29 +270,28 @@ def extract_from_pdf(pdf_input):
             if "QTY\nPRODUCT #" in text:
                 startflag = True
 
-    df = pd.DataFrame(
-        {
-            "QTY": [int(x[0]) for x in data],
-            "Item_Num": [x[1] for x in data],
-            "Description": [x[2] for x in data],
-        }
-    )
+    df = pd.DataFrame({
+        "QTY": [int(x[0]) for x in data],
+        "Item_Num": [x[1] for x in data],
+        "Description": [x[2] for x in data],
+    })
+
     # Add a MISC node
     df = pd.concat([
         df,
         pd.DataFrame({
             "QTY": [1],
-            "Item_Num": ['MISC'],
-            "Description": ['N/A']
+            "Item_Num": ["MISC"],
+            "Description": ["N/A"]
         })
-    ])
+    ], ignore_index=True)
 
     parsed_items = []
     for _, row in df.iterrows():
         for _ in range(int(row["QTY"])):
-            uid = session['next_uid']
-            session['next_uid'] += 1
-            session['active_status'][uid] = True
+            uid = session["next_uid"]
+            session["next_uid"] += 1
+            session["active_status"][uid] = True
             parsed_items.append({
                 "ID": str(row["Item_Num"]),
                 "Description": str(row["Description"]),
@@ -271,6 +299,8 @@ def extract_from_pdf(pdf_input):
                 "uid": uid
             })
     return parsed_items
+
+
 
 def check_slots():
     empty_slots = 0
@@ -1069,6 +1099,132 @@ def connect_custom():
     # Rebuild the graph so the new custom slot is appended to the part's slot list.
     update_graph()
     return jsonify(graph_to_json())
+
+@app.route("/api/prebuilts", methods=["GET"])
+def get_prebuilts():
+    """Return only Excel-defined prebuilts (global templates)."""
+    prebuilts = []
+    try:
+        if os.path.exists(PREBUILT_FILE):
+            xls = pd.ExcelFile(PREBUILT_FILE)
+            prebuilts = xls.sheet_names
+    except Exception as e:
+        print("Error reading prebuilds:", e)
+
+    return jsonify({"prebuilts": sorted(prebuilts)})
+
+
+@app.route("/api/load_prebuilt", methods=["POST"])
+def load_prebuilt():
+    """Load a prebuilt system from either Excel or session storage."""
+    data = request.get_json()
+    name = data.get("name", "")
+    if not name:
+        return jsonify({"error": "No name provided"}), 400
+
+    # --- Try Excel first ---
+    if os.path.exists(PREBUILT_FILE):
+        try:
+            xl = pd.ExcelFile(PREBUILT_FILE)
+            if name in xl.sheet_names:
+                df = pd.read_excel(PREBUILT_FILE, sheet_name=name)
+                session["quote_list"] = []
+                session["next_uid"] = 0
+                session["active_status"] = {}
+
+                for _, row in df.iterrows():
+                    part_id = str(row["Product Code"])
+                    qty = int(row["Quantity"]) if "Quantity" in row and not pd.isna(row["Quantity"]) else 1
+
+                    # Find description from part_db if missing
+                    desc = row.get("Description", "")
+                    if not desc or pd.isna(desc):
+                        match = next((p["Name"] for p in part_db if p["ID"] == part_id), part_id)
+                        desc = match
+
+                    for _ in range(qty):
+                        uid = session["next_uid"]
+                        session["next_uid"] += 1
+                        session["active_status"][uid] = True
+                        session["quote_list"].append({
+                            "ID": part_id,
+                            "Description": desc,
+                            "active": True,
+                            "uid": uid
+                        })
+
+                update_graph()
+                return jsonify(graph_to_json())
+        except Exception as e:
+            print("Excel load failed:", e)
+
+    # --- Fall back to session prebuilts ---
+    if "session_prebuilts" in session and name in session["session_prebuilts"]:
+        session["quote_list"] = list(session["session_prebuilts"][name])
+        session["next_uid"] = 0
+        session["active_status"] = {}
+        update_graph()
+        return jsonify(graph_to_json())
+
+    return jsonify({"error": f"Prebuilt '{name}' not found"}), 404
+
+@app.route("/api/save_prebuilt_session", methods=["POST"])
+def save_prebuilt_session():
+    """Save the current quote as a session-based prebuilt configuration."""
+    data = request.get_json()
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+
+    quote = session.get("quote_list", [])
+    if not quote:
+        return jsonify({"error": "No quote loaded"}), 400
+
+    if "session_prebuilts" not in session:
+        session["session_prebuilts"] = {}
+
+    # Save a shallow copy of the quote list
+    session["session_prebuilts"][name] = list(quote)
+    session.modified = True
+    return jsonify({"success": True, "message": f"Saved as '{name}'"})
+
+
+@app.route("/api/session_prebuilts", methods=["GET"])
+def get_session_prebuilts():
+    """Return all session-stored prebuilts for this user."""
+    prebuilts = list(session.get("session_prebuilts", {}).keys())
+    return jsonify({"prebuilts": prebuilts})
+
+
+@app.route("/api/load_session_prebuilt", methods=["POST"])
+def load_session_prebuilt():
+    """Load a saved prebuilt from the user's session."""
+    data = request.get_json()
+    name = data.get("name")
+    session_prebuilts = session.get("session_prebuilts", {})
+    if not name or name not in session_prebuilts:
+        return jsonify({"error": "Prebuilt not found"}), 404
+
+    session["quote_list"] = list(session_prebuilts[name])
+    session["next_uid"] = 0
+    session["active_status"] = {}
+    update_graph()
+    return jsonify(graph_to_json())
+
+@app.route("/api/delete_prebuilt_session", methods=["POST"])
+def delete_prebuilt_session():
+    """Delete a session-based prebuilt by name."""
+    data = request.get_json()
+    name = data.get("name")
+    if not name:
+        return jsonify({"error": "No name provided"}), 400
+
+    if "session_prebuilts" not in session or name not in session["session_prebuilts"]:
+        return jsonify({"error": f"Template '{name}' not found"}), 404
+
+    del session["session_prebuilts"][name]
+    session.modified = True
+    return jsonify({"success": True, "message": f"Deleted template '{name}'"})
 
 build_partdb('JBAMdb.xlsx')
 

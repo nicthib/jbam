@@ -57,6 +57,12 @@ export default function NetworkGraph() {
   let currentHoveredNode = null;
   const [suggestionSearch, setSuggestionSearch] = useState("");
   const [selectedGroup, setSelectedGroup] = useState("");
+  const [showPrebuiltModal, setShowPrebuiltModal] = useState(false);
+  const [prebuiltList, setPrebuiltList] = useState([]);
+  const [prebuiltSearch, setPrebuiltSearch] = useState("");
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+
   const normalize = (str) =>
     str.replace(/[\s-]/g, "").toLowerCase();
   const handleLogin = () => {
@@ -106,6 +112,24 @@ export default function NetworkGraph() {
       .catch((err) => console.error("Error fetching graph:", err));
   };
 
+  const handlePrebuiltSelect = (name, isSession = false) => {
+    const endpoint = isSession ? "/api/load_session_prebuilt" : "/api/load_prebuilt";
+    setShowPrebuiltModal(false);
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+      credentials: "include",
+    })
+      .then(res => res.json())
+      .then((data) => {
+        initialGraphSetup.current = false;
+        setGraphData(data);
+        setItems(data.items || []);
+      })
+      .catch(console.error);
+  };
+
   // Initial data fetch (graph + parts database)
   useEffect(() => {
     if (isLoggedIn) {
@@ -126,6 +150,22 @@ export default function NetworkGraph() {
         .catch((err) => console.error("Error fetching parts:", err));
     }
   }, [isLoggedIn]);
+
+  useEffect(() => {
+  if (isLoggedIn) {
+    Promise.all([
+      fetch("/api/prebuilts", { credentials: "include" }).then((r) => r.json()),
+      fetch("/api/session_prebuilts", { credentials: "include" }).then((r) => r.json()),
+    ])
+      .then(([global, session]) => {
+        setPrebuiltList({
+          global: global.prebuilts || [],
+          session: session.prebuilts || [],
+        });
+      })
+      .catch(console.error);
+  }
+}, [isLoggedIn, showSaveTemplateModal]);
 
   useEffect(() => {
     if (showCustomModal && pendingCustomEdge) {
@@ -1007,23 +1047,11 @@ export default function NetworkGraph() {
             Isolate Triggering
           </label>
         </div>
-        <div style={{ display: "flex", width: "50%", gap: "10px", marginBottom: "10px" }}>
+        <div style={{ display: "flex", width: "95%", gap: "10px", marginBottom: "10px" }}>
           <button
             onClick={() => {
-              fetch("/api/clear", { method: "POST",credentials: "include",})
-                .then(() => {
-                  fetchGraphData();
-                  document.cookie = "session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;";
-                })
-                .then((res) => res.json())
-                .then((data) => {
-                  initialGraphSetup.current = false;
-                  setGraphData({ nodes: [], edges: [] });
-                  setItems([]);
-                  setTimeout(() => {
-                    setGraphData(data);
-                  }, 200);
-                })
+              fetch("/api/clear", { method: "POST", credentials: "include" })
+                .then(() => fetchGraphData())
                 .catch((err) => console.error("Error clearing graph:", err));
             }}
             style={{
@@ -1037,42 +1065,337 @@ export default function NetworkGraph() {
           >
             Clear
           </button>
+
           <button
-  onClick={() => {
-    fetch("/api/save", { method: "POST", credentials: "include" })
-      .then(response => response.blob())
-      .then(blob => {
-        // Create a URL for the Blob object
-        const url = window.URL.createObjectURL(blob);
-        // Create a temporary link element
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = "notebook.txt"; // Set the file name for download
-        document.body.appendChild(a);
-        a.click();
-        // Clean up: remove the element and revoke the object URL
-        a.remove();
-        window.URL.revokeObjectURL(url);
-      })
-      .catch((err) => console.error("Error saving:", err));
-  }}
-  style={{
-    flex: 1,
-    padding: "10px",
-    backgroundColor: "green",
-    color: "white",
-    border: "none",
-    borderRadius: "5px",
-  }}
->
-  Save
-</button>
+            onClick={() => {
+              fetch("/api/save", { method: "POST", credentials: "include" })
+                .then((response) => response.blob())
+                .then((blob) => {
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = "notebook.csv";
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  window.URL.revokeObjectURL(url);
+                })
+                .catch((err) => console.error("Error saving:", err));
+            }}
+            style={{
+              flex: 1,
+              padding: "10px",
+              backgroundColor: "green",
+              color: "white",
+              border: "none",
+              borderRadius: "5px",
+            }}
+          >
+            Save
+          </button>
+
+          <button
+            onClick={() => setShowPrebuiltModal(true)}
+            style={{
+              flex: 1,
+              padding: "10px",
+              backgroundColor: "#555",
+              color: "white",
+              border: "none",
+              borderRadius: "5px",
+              cursor: "pointer",
+            }}
+          >
+            Templates
+          </button>
 
 
+
+
+          {showPrebuiltModal && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                width: "100vw",
+                height: "100vh",
+                backgroundColor: "rgba(0,0,0,0.45)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+                backdropFilter: "blur(3px)",
+              }}
+              onClick={() => setShowPrebuiltModal(false)}
+            >
+              <div
+                style={{
+                  backgroundColor: "white",
+                  borderRadius: "14px",
+                  padding: "24px",
+                  width: "420px",
+                  maxHeight: "75vh",
+                  overflowY: "auto",
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+                  position: "relative",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2 style={{ marginTop: 0, marginBottom: "16px", textAlign: "center" }}>🧩 Templates</h2>
+
+                {/* MY TEMPLATES */}
+                <h4 style={{ marginTop: "0", marginBottom: "10px", color: "#333" }}>⭐ My Templates</h4>
+                {(!prebuiltList.session || prebuiltList.session.length === 0) ? (
+                  <p style={{ color: "#999", fontSize: "14px", marginBottom: "20px" }}>None saved yet.</p>
+                ) : (
+                  prebuiltList.session.map((name) => (
+                    <div
+                      key={name}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "10px 14px",
+                        border: "1px solid #e2e2e2",
+                        borderRadius: "8px",
+                        marginBottom: "8px",
+                        backgroundColor: "#fafafa",
+                        transition: "all 0.2s ease",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#f0f8ff")}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#fafafa")}
+                    >
+                      <div
+                        style={{
+                          flexGrow: 1,
+                          cursor: "pointer",
+                          fontWeight: 500,
+                          color: "#2c3e50",
+                        }}
+                        onClick={() => handlePrebuiltSelect(name, true)}
+                      >
+                        <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ fontSize: "16px" }}>🧱</span> {name}
+                        </span>
+                      </div>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!window.confirm(`Delete template '${name}'?`)) return;
+                          fetch("/api/delete_prebuilt_session", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            credentials: "include",
+                            body: JSON.stringify({ name }),
+                          })
+                            .then((res) => res.json())
+                            .then((data) => {
+                              if (data.success) {
+                                Promise.all([
+                                  fetch("/api/prebuilts", { credentials: "include" }).then((r) => r.json()),
+                                  fetch("/api/session_prebuilts", { credentials: "include" }).then((r) => r.json()),
+                                ])
+                                  .then(([global, session]) => {
+                                    setPrebuiltList({
+                                      global: global.prebuilts || [],
+                                      session: session.prebuilts || [],
+                                    });
+                                  })
+                                  .catch(console.error);
+                              } else {
+                                alert(data.error || "Error deleting");
+                              }
+                            })
+                            .catch((err) => console.error("Error deleting template:", err));
+                        }}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          color: "#d11a2a",
+                          fontWeight: "bold",
+                          fontSize: "18px",
+                          cursor: "pointer",
+                          opacity: 0.6,
+                          transition: "opacity 0.2s",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.opacity = 1)}
+                        onMouseLeave={(e) => (e.currentTarget.style.opacity = 0.6)}
+                        title="Delete Template"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                )}
+
+                {/* GLOBAL TEMPLATES */}
+                <h4 style={{ marginTop: "20px", marginBottom: "10px", color: "#333" }}>📁 Global Templates</h4>
+                {(!prebuiltList.global || prebuiltList.global.length === 0) ? (
+                  <p style={{ color: "#999", fontSize: "14px" }}>No global templates found.</p>
+                ) : (
+                  prebuiltList.global.map((name) => (
+                    <div
+                      key={name}
+                      onClick={() => handlePrebuiltSelect(name, false)}
+                      style={{
+                        padding: "10px 14px",
+                        border: "1px solid #e2e2e2",
+                        borderRadius: "8px",
+                        marginBottom: "8px",
+                        backgroundColor: "#fff",
+                        cursor: "pointer",
+                        fontWeight: 500,
+                        color: "#2c3e50",
+                        transition: "all 0.2s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = "#f0f8ff";
+                        e.currentTarget.style.transform = "translateY(-2px)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = "#fff";
+                        e.currentTarget.style.transform = "translateY(0)";
+                      }}
+                    >
+                      <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "16px" }}>📦</span> {name}
+                      </span>
+                    </div>
+                  ))
+                )}
+
+                <div style={{ textAlign: "center", marginTop: "20px" }}>
+                  <button
+                    onClick={() => setShowPrebuiltModal(false)}
+                    style={{
+                      padding: "8px 16px",
+                      backgroundColor: "#444",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: "500",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#666")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#444")}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+
+          <button
+            onClick={() => setShowSaveTemplateModal(true)}
+            style={{
+              flex: 1,
+              padding: "10px",
+              backgroundColor: "#777",
+              color: "white",
+              border: "none",
+              borderRadius: "5px",
+              cursor: "pointer",
+            }}
+          >
+            Save as Template
+          </button>
+
+          {showSaveTemplateModal && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                width: "100vw",
+                height: "100vh",
+                backgroundColor: "rgba(0,0,0,0.4)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 200,
+              }}
+              onClick={() => setShowSaveTemplateModal(false)}
+            >
+              <div
+                style={{
+                  backgroundColor: "white",
+                  borderRadius: "10px",
+                  padding: "20px",
+                  width: "350px",
+                  boxShadow: "0 4px 15px rgba(0,0,0,0.3)",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 style={{ marginTop: 0 }}>Save Current Configuration</h3>
+                <input
+                  type="text"
+                  placeholder="Enter a name"
+                  value={newTemplateName}
+                  onChange={(e) => setNewTemplateName(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px",
+                    borderRadius: "5px",
+                    border: "1px solid #ccc",
+                    marginBottom: "15px",
+                  }}
+                />
+                <div style={{ textAlign: "right" }}>
+                  <button
+                    onClick={() => setShowSaveTemplateModal(false)}
+                    style={{
+                      marginRight: "10px",
+                      padding: "8px 15px",
+                      backgroundColor: "#aaa",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "5px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      fetch("/api/save_prebuilt_session", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        credentials: "include",
+                        body: JSON.stringify({ name: newTemplateName }),
+                      })
+                        .then((res) => res.json())
+                        .then((data) => {
+                          
+                          setShowSaveTemplateModal(false);
+                          setNewTemplateName("");
+                        })
+                        .catch((err) => console.error("Error saving template:", err));
+                    }}
+                    style={{
+                      padding: "8px 15px",
+                      backgroundColor: "green",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "5px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          
         </div>
         <input
           type="file"
-          accept=".pdf,.xls,.xlsx"
+          accept=".pdf,.xls,.xlsx,.csv"
           onChange={(event) => {
             initialGraphSetup.current = false;
             const file = event.target.files[0];
