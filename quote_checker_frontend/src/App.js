@@ -62,6 +62,7 @@ export default function NetworkGraph() {
   const [prebuiltSearch, setPrebuiltSearch] = useState("");
   const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState("");
+  const [checkedParts, setCheckedParts] = useState({});
 
   const normalize = (str) =>
     str.replace(/[\s-]/g, "").toLowerCase();
@@ -677,6 +678,18 @@ export default function NetworkGraph() {
       .catch((err) => console.error("Error toggling active state:", err));
   };
 
+  const getSlotLimit = (slotName) => {
+    if (!selectedNode?.Slots) return 1;
+    const slot = selectedNode.Slots.find(
+      (s) => s.Name.toLowerCase() === slotName.toLowerCase()
+    );
+    if (!slot) return 1;
+    const filled = slot.Filled || 0;
+    const max = slot.Max || 1;
+    const available = Math.max(0, max - filled);
+    return available;
+  };
+  
   const renderHelpModal = () => (
     <div
       style={{
@@ -1472,274 +1485,338 @@ export default function NetworkGraph() {
             </React.Fragment>
           ))}
         </ul>
+        
+
         {selectedNode && (
-  <div
-    style={{
-      position: "fixed",
-      top: 0,
-      left: 0,
-      width: "100vw",
-      height: "100vh",
-      backgroundColor: "rgba(0, 0, 0, 0.4)",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
-      zIndex: 9999,
-    }}
-  >
-    <div
-      style={{
-        backgroundColor: "#fff",
-        border: "1px solid #ddd",
-        borderRadius: "5px",
-        width: "700px",
-        maxHeight: "80vh",
-        overflowY: "auto",
-        boxShadow: "0 2px 6px rgba(0, 0, 0, 0.2)",
-        position: "relative",
-      }}
-    >
-      {/* Modal Header */}
-      <div
-        style={{
-          position: "sticky",
-          top: 0,
-          left: 0,
-          backgroundColor: "#fff",
-          zIndex: 10,
-          padding: "10px 20px",
-          borderBottom: "1px solid #ddd",
-          display: "flex",
-          alignItems: "center",
-        }}
-      >
-        <button
-          onClick={() => {
-            setSelectedNode(null);
-            setSuggestions({});
-          }}
-          style={{
-            backgroundColor: "red",
-            color: "white",
-            border: "none",
-            borderRadius: "50%",
-            width: "30px",
-            height: "30px",
-            fontSize: "18px",
-            fontWeight: "bold",
-            cursor: "pointer",
-            marginRight: "15px",
-            marginLeft: "-5px",
-            flexShrink: 0,
-          }}
-        >
-          <svg
-            width="24"
-            height="24"
-            viewBox="1 -1 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <line x1="4" y1="7" x2="16" y2="19" stroke="white" strokeWidth="4" />
-            <line x1="16" y1="7" x2="4" y2="19" stroke="white" strokeWidth="4" />
-          </svg>
-        </button>
-        <h4 style={{ margin: 0 }}>Suggestions for {selectedNode.label}</h4>
-      </div>
-      <div style={{ padding: "20px" }}>
-        {/* Conditionally show the Search Bar if there are 10 or more suggestions */}
-        {totalSuggestionsCount >= 10 && (
-          <input
-            type="text"
-            placeholder="Search suggestions..."
-            value={suggestionSearch}
-            onChange={(e) => setSuggestionSearch(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "8px",
-              marginBottom: "15px",
-              borderRadius: "4px",
-              border: "1px solid #ccc",
-            }}
-          />
-        )}
-        {/* Toggle for Active/Inactive Status */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            marginBottom: "10px",
-          }}
-        >
           <div
             style={{
-              position: "relative",
-              display: "inline-block",
-              width: "50px",
-              height: "24px",
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: "100vw",
+              height: "100vh",
+              backgroundColor: "rgba(0, 0, 0, 0.4)",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              zIndex: 9999,
             }}
           >
-            <input
-              type="checkbox"
-              id="toggleActive"
-              checked={selectedNode.active}
-              onChange={handleToggleActive}
-              style={{ opacity: 0, width: 0, height: 0 }}
-            />
-            <label
-              htmlFor="toggleActive"
+            <div
               style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                backgroundColor: selectedNode.active ? "#4CAF50" : "#ccc",
-                borderRadius: "24px",
-                cursor: "pointer",
-                transition: "background-color 0.2s",
+                backgroundColor: "#fff",
+                border: "1px solid #ddd",
+                borderRadius: "5px",
+                width: "700px",
+                maxHeight: "80vh",
+                overflowY: "auto",
+                boxShadow: "0 2px 6px rgba(0, 0, 0, 0.2)",
+                position: "relative",
               }}
             >
-              <span
+              {/* Modal Header */}
+              <div
                 style={{
-                  position: "absolute",
-                  height: "20px",
-                  width: "20px",
-                  left: selectedNode.active ? "26px" : "4px",
-                  bottom: "2px",
-                  backgroundColor: "white",
-                  borderRadius: "50%",
-                  transition: "left 0.2s",
+                  position: "sticky",
+                  top: 0,
+                  left: 0,
+                  backgroundColor: "#fff",
+                  zIndex: 10,
+                  padding: "10px 20px",
+                  borderBottom: "1px solid #ddd",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
                 }}
-              ></span>
-            </label>
-          </div>
-          <span style={{ marginLeft: "10px", fontWeight: "bold" }}>
-            {selectedNode.active ? "Active" : "Inactive"}
-          </span>
-        </div>
-        {/* Toggle for Suggestion Type */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            marginBottom: "10px",
-          }}
-        >
-          <div
-            style={{
-              position: "relative",
-              display: "inline-block",
-              width: "50px",
-              height: "24px",
-            }}
-          >
-            <input
-              type="checkbox"
-              id="toggleSuggestion"
-              checked={suggestionType === "missing parts"}
-              onChange={(e) =>
-                setSuggestionType(e.target.checked ? "missing parts" : "all parts")
-              }
-              style={{ opacity: 0, width: 0, height: 0 }}
-            />
-            <label
-              htmlFor="toggleSuggestion"
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                backgroundColor: suggestionType === "missing parts" ? "#4CAF50" : "#ccc",
-                borderRadius: "24px",
-                cursor: "pointer",
-                transition: "background-color 0.2s",
-              }}
-            >
-              <span
-                style={{
-                  position: "absolute",
-                  height: "20px",
-                  width: "20px",
-                  left: suggestionType === "missing parts" ? "26px" : "4px",
-                  bottom: "2px",
-                  backgroundColor: "white",
-                  borderRadius: "50%",
-                  transition: "left 0.2s",
-                }}
-              ></span>
-            </label>
-          </div>
-          <span style={{ marginLeft: "10px", fontWeight: "bold" }}>
-            {suggestionType === "missing parts" ? "Missing Parts" : "All Parts"}
-          </span>
-        </div>
-        {/* Suggestions List */}
-        {Object.keys(filteredSuggestions).length > 0 ? (
-          Object.keys(filteredSuggestions).map((slotName) => {
-            // Sort suggestions alphabetically by the part Name
-            const sortedParts = filteredSuggestions[slotName]
-              .slice()
-              .sort((a, b) => a.Name.localeCompare(b.Name));
-            return (
-              <div key={slotName} style={{ marginBottom: "20px" }}>
-                <h5>{slotName}</h5>
-                <ul style={{ listStyleType: "none", padding: 0 }}>
-                  {sortedParts.map((part) => (
-                    <li
-                      key={part.ID}
+              >
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <button
+                    onClick={() => {
+                      setSelectedNode(null);
+                      setSuggestions({});
+                      setCheckedParts({});
+                    }}
+                    style={{
+                      backgroundColor: "red",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "50%",
+                      width: "30px",
+                      height: "30px",
+                      fontSize: "18px",
+                      fontWeight: "bold",
+                      cursor: "pointer",
+                      marginRight: "15px",
+                      marginLeft: "-5px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <svg
+                      width="24"
+                      height="24"
+                      viewBox="1 -1 24 24"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <line x1="4" y1="7" x2="16" y2="19" stroke="white" strokeWidth="4" />
+                      <line x1="16" y1="7" x2="4" y2="19" stroke="white" strokeWidth="4" />
+                    </svg>
+                  </button>
+                  <h4 style={{ margin: 0 }}>Suggestions for {selectedNode.label}</h4>
+                </div>
+
+                {/* Salesforce icon (top-right) */}
+                {selectedNode?.SalesforceID && (
+                  <a
+                    href={`https://nikoninstruments.lightning.force.com/lightning/r/Product2/${selectedNode.SalesforceID}/view`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="View in Salesforce"
+                    style={{
+                      marginLeft: "auto",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                  >
+                    <img
+                      src="/images/salesforce_logo.png"
+                      alt="Salesforce"
                       style={{
-                        marginBottom: "10px",
-                        display: "flex",
-                        alignItems: "center",
+                        width: "70px",
+                        height: "auto",
+                        cursor: "pointer",
+                        opacity: 0.85,
+                        transition: "opacity 0.2s ease-in-out",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                      onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.85")}
+                    />
+                  </a>
+                )}
+              </div>
+
+              <div style={{ padding: "20px" }}>
+                {/* Conditionally show the Search Bar if there are 10 or more suggestions */}
+                {totalSuggestionsCount >= 10 && (
+                  <input
+                    type="text"
+                    placeholder="Search suggestions..."
+                    value={suggestionSearch}
+                    onChange={(e) => setSuggestionSearch(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "8px",
+                      marginBottom: "15px",
+                      borderRadius: "4px",
+                      border: "1px solid #ccc",
+                    }}
+                  />
+                )}
+
+                {/* Active / Inactive Toggle */}
+                <div style={{ display: "flex", alignItems: "center", marginBottom: "10px" }}>
+                  <div style={{ position: "relative", display: "inline-block", width: "50px", height: "24px" }}>
+                    <input
+                      type="checkbox"
+                      id="toggleActive"
+                      checked={selectedNode.active}
+                      onChange={handleToggleActive}
+                      style={{ opacity: 0, width: 0, height: 0 }}
+                    />
+                    <label
+                      htmlFor="toggleActive"
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: selectedNode.active ? "#4CAF50" : "#ccc",
+                        borderRadius: "24px",
+                        cursor: "pointer",
+                        transition: "background-color 0.2s",
                       }}
                     >
-                      <button
-                        onClick={() => {
-                          fetch("/api/add_item", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ item: part.ID }),
-                            credentials: "include",
-                          })
-                            .then(() => {
-                              fetchGraphData();
-                              setSelectedNode(null);
-                              setSuggestions({});
-                            })
-                            .catch((err) =>
-                              console.error("Error adding suggested part:", err)
-                            );
-                        }}
+                      <span
                         style={{
-                          cursor: "pointer",
-                          backgroundColor: "#4CAF50",
-                          color: "white",
-                          border: "none",
-                          borderRadius: "3px",
-                          padding: "5px 8px",
-                          marginRight: "10px",
+                          position: "absolute",
+                          height: "20px",
+                          width: "20px",
+                          left: selectedNode.active ? "26px" : "4px",
+                          bottom: "2px",
+                          backgroundColor: "white",
+                          borderRadius: "50%",
+                          transition: "left 0.2s",
                         }}
-                      >
-                        +
-                      </button>
-                      <span>
-                        <strong>{part.ID}</strong> - {part.Name}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                      ></span>
+                    </label>
+                  </div>
+                  <span style={{ marginLeft: "10px", fontWeight: "bold" }}>
+                    {selectedNode.active ? "Active" : "Inactive"}
+                  </span>
+                </div>
+
+                {/* Suggestion Type Toggle */}
+                <div style={{ display: "flex", alignItems: "center", marginBottom: "10px" }}>
+                  <div style={{ position: "relative", display: "inline-block", width: "50px", height: "24px" }}>
+                    <input
+                      type="checkbox"
+                      id="toggleSuggestion"
+                      checked={suggestionType === "missing parts"}
+                      onChange={(e) =>
+                        setSuggestionType(e.target.checked ? "missing parts" : "all parts")
+                      }
+                      style={{ opacity: 0, width: 0, height: 0 }}
+                    />
+                    <label
+                      htmlFor="toggleSuggestion"
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: suggestionType === "missing parts" ? "#4CAF50" : "#ccc",
+                        borderRadius: "24px",
+                        cursor: "pointer",
+                        transition: "background-color 0.2s",
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: "absolute",
+                          height: "20px",
+                          width: "20px",
+                          left: suggestionType === "missing parts" ? "26px" : "4px",
+                          bottom: "2px",
+                          backgroundColor: "white",
+                          borderRadius: "50%",
+                          transition: "left 0.2s",
+                        }}
+                      ></span>
+                    </label>
+                  </div>
+                  <span style={{ marginLeft: "10px", fontWeight: "bold" }}>
+                    {suggestionType === "missing parts" ? "Missing Parts" : "All Parts"}
+                  </span>
+                </div>
+
+                {/* Suggestions List */}
+                {Object.keys(filteredSuggestions).length > 0 ? (
+                  Object.keys(filteredSuggestions).map((slotName) => {
+                    const sortedParts = filteredSuggestions[slotName]
+                      .slice()
+                      .sort((a, b) => a.Name.localeCompare(b.Name));
+                    const limit = getSlotLimit(slotName);
+
+                    return (
+                      <div key={slotName} style={{ marginBottom: "20px" }}>
+                        <h5>
+                          {slotName}{" "}
+                          <span style={{ fontWeight: "normal", fontSize: "0.85em" }}>
+                            ({checkedParts[slotName]?.length || 0}/{limit})
+                          </span>
+                        </h5>
+                        <ul style={{ listStyleType: "none", padding: 0 }}>
+                          {sortedParts.map((part) => (
+                            <li
+                              key={part.ID}
+                              style={{
+                                marginBottom: "10px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checkedParts[slotName]?.includes(part.ID) || false}
+                                disabled={
+                                  checkedParts[slotName]?.length >= limit &&
+                                  !checkedParts[slotName]?.includes(part.ID)
+                                }
+                                onChange={(e) => {
+                                  setCheckedParts((prev) => {
+                                    const current = prev[slotName] || [];
+                                    if (e.target.checked) {
+                                      return { ...prev, [slotName]: [...current, part.ID] };
+                                    } else {
+                                      return {
+                                        ...prev,
+                                        [slotName]: current.filter((id) => id !== part.ID),
+                                      };
+                                    }
+                                  });
+                                }}
+                                style={{ marginRight: "10px", transform: "scale(1.3)" }}
+                              />
+                              <span>
+                                <strong>{part.ID}</strong> - {part.Name}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p style={{ margin: "10px 0" }}>No suggestions available.</p>
+                )}
+
+                {/* Add Selected Button (sticky footer) */}
+                <div
+                  style={{
+                    position: "sticky",
+                    bottom: 0,
+                    backgroundColor: "#fff",
+                    borderTop: "1px solid #ddd",
+                    padding: "12px 20px",
+                    textAlign: "right",
+                    zIndex: 5,
+                  }}
+                >
+                  <button
+                    onClick={() => {
+                      const allSelected = Object.values(checkedParts).flat();
+                      fetch("/api/add_item", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ items: allSelected }),
+                        credentials: "include",
+                      })
+                        .then((res) => {
+                          if (!res.ok) throw new Error("Failed to add parts");
+                          return res.json();
+                        })
+                        .then(() => {
+                          fetchGraphData();
+                          setSelectedNode(null);
+                          setSuggestions({});
+                          setCheckedParts({});
+                        })
+                        .catch((err) => console.error("Error adding selected parts:", err));
+                    }}
+                    disabled={Object.keys(checkedParts).length === 0}
+                    style={{
+                      backgroundColor: "#4CAF50",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "4px",
+                      padding: "10px 20px",
+                      fontSize: "14px",
+                      cursor: Object.keys(checkedParts).length === 0 ? "not-allowed" : "pointer",
+                      opacity: Object.keys(checkedParts).length === 0 ? 0.6 : 1,
+                      fontWeight: "bold",
+                    }}
+                  >
+                    Add Selected
+                  </button>
+                </div>
+
               </div>
-            );
-          })
-        ) : (
-          <p style={{ margin: "10px 0" }}>No suggestions available.</p>
+            </div>
+          </div>
         )}
-      </div>
-    </div>
-  </div>
-)}
+
 
         <div
           style={{

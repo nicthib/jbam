@@ -120,6 +120,9 @@ def build_partdb(file):
 
     sf_db = pd.read_excel('productDB.xlsx')  # Salesforce export
     sf_codes = sf_db['Product Code'].astype(str).unique()
+    sf_lookup = dict(
+        zip(sf_db['Product Code'].astype(str), sf_db['Product2ID'].astype(str))
+    )
 
     # Filter JBAMdb based on Salesforce active products
     df = df[df['Product Code'].astype(str).isin(sf_codes) | df['Product Code'].astype(str).str.startswith('JBAM-')]
@@ -162,7 +165,8 @@ def build_partdb(file):
             'Slots': slot_list,
             'Alias': part_alias,
             'AddPart': ','.join(add_part),
-            'Tags': part_tags
+            'Tags': part_tags,
+            'SalesforceID': sf_lookup.get(part_id, None),
         })
         if not slot_list and not part_alias and part_name:
             empty_parts += 1
@@ -503,9 +507,9 @@ def update_graph():
         if set(slot1["Name"].split('|')).intersection(set(slot2["Name"].split('|'))) and slot1['Type'] != slot2['Type'] and len(slot1['Status']) < int(slot1['Max']) and len(slot2['Status']) < int(slot2['Max']) and part1['active'] and part2['active']:
             # This is a directed graph, so we always connect from Host to Plug
             if slot1['Type'] == 'Host':
-                G.add_edge(part1["Name"], part2["Name"])
+                G.add_edge(part1["Name"], part2["Name"], fromSlot=slot1["Name"], toSlot=slot2["Name"])
             else:
-                G.add_edge(part2["Name"], part1["Name"])
+                G.add_edge(part2["Name"], part1["Name"], fromSlot=slot2["Name"], toSlot=slot1["Name"])
             
             # Add part uid to status
             slot1["Status"].append(part2['uid'])
@@ -639,9 +643,11 @@ def update_graph():
                             "imageHeight": 40
                         },
                         "to": {"enabled": False},
-                    }, arrowStrikethrough=False)
+                    }, arrowStrikethrough=False,
+                    fromSlot=slot1["Name"],
+                    toSlot=slot2["Name"])
                 else:
-                    G.add_edge(part2["Name"], part1["Name"])
+                    G.add_edge(part2["Name"], part1["Name"],fromSlot=slot1["Name"],toSlot=slot2["Name"])
 
                 slot1["Status"].append(part2['uid'])
                 slot2["Status"].append(part1['uid'])
@@ -670,23 +676,34 @@ def graph_to_json():
     """
     Build the merged graph + a sidebar-friendly items list that nests ghosts
     under their user-added parent(s) with no duplicate top-level rows.
+    Includes slot occupancy counts.
     """
     from collections import defaultdict
 
-    # === Build adjacency (already present in your code before merging) ===
     name_to_data = {nd["Name"]: nd for nd in session["quote_network"]}
     adjacency_map = {}
     for u, v in G.edges():
         adjacency_map.setdefault(u, set()).add(v)
         adjacency_map.setdefault(v, set()).add(u)
 
-    # === Merge nodes (same as your current approach) ===
+    # === Compute slot usage counts ===
+    slot_usage = defaultdict(int)
+    for edge in G.edges(data=True):
+        src = edge[0]
+        tgt = edge[1]
+        src_slot = edge[2].get("fromSlot")
+        tgt_slot = edge[2].get("toSlot")
+        if src_slot:
+            slot_usage[(src, src_slot)] += 1
+        if tgt_slot:
+            slot_usage[(tgt, tgt_slot)] += 1
+
+    # === Merge nodes ===
     merge_dict = {}
     for n in G.nodes():
         nd = name_to_data.get(n, {})
         if not nd:
             continue
-        # Merge key considers ID, ghost flag, active state and neighbors
         node_name = n
         key = (
             nd.get("ID"),
@@ -695,11 +712,7 @@ def graph_to_json():
             tuple(sorted(adjacency_map.get(n, []))),
         )
         if key not in merge_dict:
-            merge_dict[key] = {
-                "representative_name": node_name,
-                "uids": [],
-                "count": 0,
-            }
+            merge_dict[key] = {"representative_name": node_name, "uids": [], "count": 0}
         merge_dict[key]["count"] += 1
         merge_dict[key]["uids"].append(nd.get("uid"))
 
@@ -708,20 +721,34 @@ def graph_to_json():
     for merge_key, info in merge_dict.items():
         rep_name = info["representative_name"]
         rep_nd = name_to_data[rep_name]
-        # strip trailing index from Name (e.g., "MXA22158 0" -> "MXA22158")
         label_no_index = rep_nd["Name"].rsplit(" ", 1)[0]
         count = info["count"]
+
+        # Enrich slots with Filled counts
+        enriched_slots = []
+        for s in rep_nd.get("Slots", []):
+            slot_name = s.get("Name")
+            filled = slot_usage.get((rep_name, slot_name), 0)
+            enriched_slots.append({
+                "Name": slot_name,
+                "Type": s.get("Type"),
+                "Min": s.get("Min", 0),
+                "Max": s.get("Max", 1),
+                "Filled": filled
+            })
+
         merged_nodes.append({
             "id": rep_name,
             "label": label_no_index,
             "badgeCount": count,
             "ghost": rep_nd.get("GhostPart", False),
             "active": rep_nd.get("active", True),
-            "uid": info["uids"],              # list of uids merged here
+            "uid": info["uids"],
             "tags": rep_nd.get("Tags", []),
+            "SalesforceID": rep_nd.get("SalesforceID"),
+            "Slots": enriched_slots,
         })
 
-        # Map all nodes with same merge_key to rep_name
         for n in G.nodes():
             nd = name_to_data.get(n, {})
             if not nd:
@@ -735,7 +762,7 @@ def graph_to_json():
             if current_key == merge_key:
                 name_to_rep[n] = rep_name
 
-    # === Merge edges (same as your current approach) ===
+    # === Merge edges ===
     merged_edges = {}
     for u, v, edge_data in G.edges(data=True):
         rep_u = name_to_rep.get(u, u)
@@ -752,7 +779,7 @@ def graph_to_json():
                 merged_edges[key]["arrows"] = edge_data["arrows"]
     merged_edges_list = list(merged_edges.values())
 
-    # === Build ghosts_by_parent from quote_network (ghost-<parent_uid>-<idx>) ===
+    # === Ghost hierarchy for sidebar ===
     ghosts_by_parent = defaultdict(list)
     for part in session["quote_network"]:
         if part.get("GhostPart"):
@@ -761,13 +788,12 @@ def graph_to_json():
                 bits = uid.split("-")
                 if len(bits) >= 3:
                     parent_uid = bits[1]
-                    base_name = part.get("Name", "").rsplit(" ", 1)[0]  # strip trailing index
+                    base_name = part.get("Name", "").rsplit(" ", 1)[0]
                     ghosts_by_parent[parent_uid].append({
                         "id": part.get("ID", ""),
                         "description": base_name,
                     })
 
-    # === Count user-added items (by ID) and collect the uids for each ID ===
     user_counts = {}
     uids_by_id = defaultdict(list)
     for p in session["quote_list"]:
@@ -781,16 +807,13 @@ def graph_to_json():
 
     user_added_ids = set(user_counts.keys())
 
-    # === Build sidebar items: each user-added ID + its ghosts ===
     merged_items = []
     for pid, info in user_counts.items():
         base_desc = info["desc"]
         final_desc = f"{base_desc} x{info['count']}" if info["count"] > 1 else base_desc
-
         child_ghosts = []
         for puid in uids_by_id[pid]:
             for g in ghosts_by_parent.get(puid, []):
-                # If a ghost ID is also user-added, don't repeat it under the parent.
                 if g["id"] in user_added_ids:
                     continue
                 child_ghosts.append(g)
@@ -798,15 +821,14 @@ def graph_to_json():
         merged_items.append({
             "id": pid,
             "description": final_desc,
-            "ghosts": child_ghosts,   # <<— frontend can render directly
+            "ghosts": child_ghosts,
         })
 
-    # === Slot checks / status message (unchanged) ===
+    # === Slot checks / status ===
     empty_slots, open_slot_nodes, available_slot_nodes, verbose_error = check_slots()
     verbose_error = "\n".join(verbose_error)
     status_message = verbose_error if empty_slots else "All slots filled."
 
-    # === Final payload ===
     return {
         "nodes": merged_nodes,
         "edges": merged_edges_list,
@@ -816,6 +838,7 @@ def graph_to_json():
         "status_message": status_message,
         "warnings": session["warnings_list"],
     }
+
 
 
 @app.before_request
@@ -844,27 +867,41 @@ def get_graph():
 @app.route("/api/add_item", methods=["POST"])
 def add_item():
     global part_db
-    data = request.json
-    item_id = data.get("item")
-    part_entry = next((part for part in part_db if part["ID"] == item_id), None)
-    if part_entry:
-        desc = part_entry["Name"]
-    else:
-        desc = "Unknown Part"
+    data = request.get_json()
 
-    new_item = {
-        "ID": item_id,
-        "Description": desc,
-        "active": True,
-        "uid": session['next_uid']
-    }
-    session['active_status'][session['next_uid']] = True
-    session['next_uid'] += 1
-    session['quote_list'].append(new_item)
-    session['Notebook'].append('Added {} - {}'.format(item_id,desc))
-    logging.info('[{}] Session {} added part {}'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:],item_id))
+    # Support both single and multiple items
+    items = data.get("items") or [data.get("item")]
+
+    for item_id in items:
+        if not item_id:
+            continue
+
+        # Find part entry
+        part_entry = next((part for part in part_db if part["ID"] == item_id), None)
+        desc = part_entry["Name"] if part_entry else "Unknown Part"
+
+        new_item = {
+            "ID": item_id,
+            "Description": desc,
+            "active": True,
+            "uid": session['next_uid']
+        }
+
+        session['active_status'][session['next_uid']] = True
+        session['next_uid'] += 1
+        session['quote_list'].append(new_item)
+        session['Notebook'].append(f"Added {item_id} - {desc}")
+        logging.info(
+            "[{}] Session {} added part {}".format(
+                datetime.now().strftime("%m-%d %H:%M"),
+                session.sid[-4:],
+                item_id
+            )
+        )
+
     update_graph()
     return jsonify(graph_to_json())
+
 
 @app.route("/api/remove_item", methods=["POST"])
 def remove_item():
