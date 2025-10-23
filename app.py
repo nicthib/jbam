@@ -24,7 +24,14 @@ def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 sys.excepthook = log_uncaught_exceptions
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_BUILD_DIR = os.path.join(BASE_DIR, "quote_checker_frontend", "build")
+
+app = Flask(
+    __name__,
+    static_folder=os.path.join(FRONTEND_BUILD_DIR, "static"),  # point to /build/static
+    static_url_path="/static"  # tell Flask these URLs should map there
+)
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_FILE_DIR'] = 'flask_session'
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -1278,18 +1285,17 @@ if __name__ == "__main__":
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
-def serve_react(path):
-    build_dir = os.path.join(os.path.dirname(__file__), "quote_checker_frontend", "build")
-    full_path = os.path.join(build_dir, path)
+def serve(path):
+    """
+    Serves the React single-page app (SPA).
+    """
+    full_path = os.path.join(FRONTEND_BUILD_DIR, path)
+    log.info(f"Serving path={path}")
 
-    # Serve real files if they exist anywhere inside build/
-    if os.path.isfile(full_path):
-        return send_from_directory(build_dir, path)
+    # Serve actual files if they exist in the build folder (e.g., manifest.json, logo192.png)
+    if path and os.path.exists(full_path):
+        log.info(f"Serving file: {full_path}")
+        return send_from_directory(FRONTEND_BUILD_DIR, path)
 
-    # Serve static assets like /static/js/... even when nested
-    static_path = os.path.join(build_dir, "static", path.replace("static/", "", 1))
-    if path.startswith("static/") and os.path.isfile(static_path):
-        return send_from_directory(os.path.join(build_dir, "static"), path.replace("static/", "", 1))
-
-    # Otherwise fallback to index.html (for React Router etc.)
-    return send_from_directory(build_dir, "index.html")
+    # Otherwise serve index.html for all other routes
+    return send_from_directory(FRONTEND_BUILD_DIR, "index.html")
