@@ -1268,11 +1268,11 @@ if __name__ == "__main__":
     try:
         if os.path.exists("JBAMdb.xlsx"):
             build_partdb("JBAMdb.xlsx")
-            print("✅ build_partdb succeeded")
+            print("✅ build_partdb succeeded", flush=True)
         else:
-            print("⚠️ JBAMdb.xlsx not found — skipping build_partdb()")
+            print("⚠️ JBAMdb.xlsx not found — skipping build_partdb()", flush=True)
     except Exception as e:
-        print(f"❌ build_partdb failed: {e}")
+        print(f"❌ build_partdb failed: {e}", flush=True)
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
