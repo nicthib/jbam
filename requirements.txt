@@ -1,6 +1,6 @@
 setuptools>=65.0.0
 wheel>=0.38.0
-fitz==0.0.1.dev2
+PyMuPDF==1.24.4
 Flask==2.2.2
 Flask_Cors==5.0.0
 networkx==3.1
