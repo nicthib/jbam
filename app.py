@@ -51,13 +51,13 @@ def require_auth():
         if not session.get('authenticated'):
             return jsonify({"error": "Not authorized"}), 401
 
-CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://publicationexplorer.com"]}})
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://publicationexplorer.com","https://jbam.onrender.com"]}})
 Session(app)
 G = nx.DiGraph()
 part_db = []
 system_tags = []
 PREBUILT_FILE = 'prebuilds.xlsx'
-
+build_partdb("JBAMdb.xlsx")
 
 # A tiny Union–Find (Disjoint‐Set) for part‐UIDs:
 class UnionFind:
@@ -1262,8 +1262,3 @@ def delete_prebuilt_session():
     del session["session_prebuilts"][name]
     session.modified = True
     return jsonify({"success": True, "message": f"Deleted template '{name}'"})
-
-build_partdb('JBAMdb.xlsx')
-
-if __name__ == "__main__":
-    app.run(threaded=True)
