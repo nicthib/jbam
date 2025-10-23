@@ -57,7 +57,6 @@ G = nx.DiGraph()
 part_db = []
 system_tags = []
 PREBUILT_FILE = 'prebuilds.xlsx'
-build_partdb("JBAMdb.xlsx")
 
 # A tiny Union–Find (Disjoint‐Set) for part‐UIDs:
 class UnionFind:
@@ -1262,3 +1261,5 @@ def delete_prebuilt_session():
     del session["session_prebuilts"][name]
     session.modified = True
     return jsonify({"success": True, "message": f"Deleted template '{name}'"})
+
+build_partdb("JBAMdb.xlsx")
