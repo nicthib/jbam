@@ -1298,5 +1298,4 @@ def serve_frontend(path):
     else:
         return send_from_directory(build_dir, "index.html")
 
-if __name__ == "__main__":
-    build_partdb("JBAMdb.xlsx")
+build_partdb('JBAMdb.xlsx')
