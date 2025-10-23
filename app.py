@@ -1,4 +1,4 @@
-from flask import Flask, Response, jsonify, request, session, make_response
+from flask import Flask, Response, jsonify, request, session, make_response, send_from_directory
 from flask_cors import CORS
 from flask_session import Session
 import networkx as nx
@@ -51,7 +51,7 @@ def require_auth():
         if not session.get('authenticated'):
             return jsonify({"error": "Not authorized"}), 401
 
-CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://publicationexplorer.com","https://jbam.onrender.com"]}})
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://publicationexplorer.com","https://jbam-production.up.railway.app/"]}})
 Session(app)
 G = nx.DiGraph()
 part_db = []
@@ -1268,3 +1268,11 @@ if __name__ == "__main__":
     build_partdb("JBAMdb.xlsx")
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_react(path):
+    if path != "" and os.path.exists(os.path.join("build", path)):
+        return send_from_directory("build", path)
+    else:
+        return send_from_directory("build", "index.html")
