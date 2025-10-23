@@ -63,6 +63,27 @@ export default function NetworkGraph() {
   const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState("");
   const [checkedParts, setCheckedParts] = useState({});
+  
+  useEffect(() => {
+    fetch("/api/check_session", { credentials: "include" })
+      .then(res => res.json())
+      .then(data => {
+        if (data.logged_in) {
+          setIsLoggedIn(true);
+          fetch("/api/graph", { credentials: "include" })
+            .then(r => r.json())
+            .then(g => {
+              setGraphData(g);
+              setItems(g.items || []);
+              setStatusMessage(g.status_message || "");
+            });
+          fetch("/api/parts", { credentials: "include" })
+            .then(r => r.json())
+            .then(setPartDB);
+        }
+      })
+      .catch(console.error);
+  }, []);
 
   const normalize = (str) =>
     str.replace(/[\s-]/g, "").toLowerCase();

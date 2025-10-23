@@ -1266,6 +1266,12 @@ def delete_prebuilt_session():
     session.modified = True
     return jsonify({"success": True, "message": f"Deleted template '{name}'"})
 
+@app.route("/api/check_session")
+def check_session():
+    if session.get("logged_in"):
+        return jsonify({"logged_in": True})
+    return jsonify({"logged_in": False})
+
 if __name__ == "__main__":
     # Run only in local dev
     print("Running locally, building partdb...")
