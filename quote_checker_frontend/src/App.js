@@ -1074,6 +1074,7 @@ export default function NetworkGraph() {
               color: "white",
               border: "none",
               borderRadius: "5px",
+              cursor: "pointer",
             }}
           >
             Clear
@@ -1102,6 +1103,7 @@ export default function NetworkGraph() {
               color: "white",
               border: "none",
               borderRadius: "5px",
+              cursor: "pointer",
             }}
           >
             Save
