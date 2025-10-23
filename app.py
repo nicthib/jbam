@@ -1279,7 +1279,8 @@ if __name__ == "__main__":
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_react(path):
-    if path != "" and os.path.exists(os.path.join("build", path)):
-        return send_from_directory("build", path)
+    build_dir = os.path.join(os.path.dirname(__file__), "quote_checker_frontend", "build")
+    if path != "" and os.path.exists(os.path.join(build_dir, path)):
+        return send_from_directory(build_dir, path)
     else:
-        return send_from_directory("build", "index.html")
+        return send_from_directory(build_dir, "index.html")
