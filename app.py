@@ -1262,4 +1262,9 @@ def delete_prebuilt_session():
     session.modified = True
     return jsonify({"success": True, "message": f"Deleted template '{name}'"})
 
-build_partdb("JBAMdb.xlsx")
+if __name__ == "__main__":
+    # Run only in local dev
+    print("Running locally, building partdb...")
+    build_partdb("JBAMdb.xlsx")
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
