@@ -27,11 +27,9 @@ sys.excepthook = log_uncaught_exceptions
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_BUILD_DIR = os.path.join(BASE_DIR, "quote_checker_frontend", "build")
 
-app = Flask(
-    __name__,
-    static_folder=os.path.join(FRONTEND_BUILD_DIR, "static"),  # point to /build/static
-    static_url_path="/static"  # tell Flask these URLs should map there
-)
+app = Flask(__name__,
+            static_folder=os.path.join("quote_checker_frontend", "build"),
+            static_url_path="/")
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_FILE_DIR'] = 'flask_session'
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -1269,19 +1267,6 @@ def delete_prebuilt_session():
     session.modified = True
     return jsonify({"success": True, "message": f"Deleted template '{name}'"})
 
-if __name__ == "__main__":
-    # Run only in local dev
-    print("Running locally, building partdb...")
-    try:
-        if os.path.exists("JBAMdb.xlsx"):
-            build_partdb("JBAMdb.xlsx")
-            print("✅ build_partdb succeeded", flush=True)
-        else:
-            print("⚠️ JBAMdb.xlsx not found — skipping build_partdb()", flush=True)
-    except Exception as e:
-        print(f"❌ build_partdb failed: {e}", flush=True)
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
@@ -1299,3 +1284,17 @@ def serve(path):
 
     # Otherwise serve index.html for all other routes
     return send_from_directory(FRONTEND_BUILD_DIR, "index.html")
+
+if __name__ == "__main__":
+    # Run only in local dev
+    print("Running locally, building partdb...")
+    try:
+        if os.path.exists("JBAMdb.xlsx"):
+            build_partdb("JBAMdb.xlsx")
+            print("✅ build_partdb succeeded", flush=True)
+        else:
+            print("⚠️ JBAMdb.xlsx not found — skipping build_partdb()", flush=True)
+    except Exception as e:
+        print(f"❌ build_partdb failed: {e}", flush=True)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
