@@ -1266,5 +1266,5 @@ if __name__ == "__main__":
     # Run only in local dev
     print("Running locally, building partdb...")
     build_partdb("JBAMdb.xlsx")
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
