@@ -1297,3 +1297,5 @@ def serve_frontend(path):
         return send_from_directory(build_dir, path)
     else:
         return send_from_directory(build_dir, "index.html")
+
+build_partdb('JBAMdb.xlsx')
