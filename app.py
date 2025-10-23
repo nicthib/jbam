@@ -24,7 +24,11 @@ def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 sys.excepthook = log_uncaught_exceptions
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder="quote_checker_frontend/build",
+    static_url_path=""
+)
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_FILE_DIR'] = 'flask_session'
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -1276,7 +1280,10 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-@app.route("/", defaults={"path": ""})
+@app.route("/")
+def index():
+    return send_from_directory(app.static_folder, "index.html")
+
 @app.route("/<path:path>")
 def serve_react(path):
     build_dir = os.path.join(os.path.dirname(__file__), "quote_checker_frontend", "build")
