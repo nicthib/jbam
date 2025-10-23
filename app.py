@@ -1265,7 +1265,14 @@ def delete_prebuilt_session():
 if __name__ == "__main__":
     # Run only in local dev
     print("Running locally, building partdb...")
-    build_partdb("JBAMdb.xlsx")
+    try:
+        if os.path.exists("JBAMdb.xlsx"):
+            build_partdb("JBAMdb.xlsx")
+            print("✅ build_partdb succeeded")
+        else:
+            print("⚠️ JBAMdb.xlsx not found — skipping build_partdb()")
+    except Exception as e:
+        print(f"❌ build_partdb failed: {e}")
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
