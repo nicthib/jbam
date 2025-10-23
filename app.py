@@ -24,12 +24,7 @@ def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 sys.excepthook = log_uncaught_exceptions
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_BUILD_DIR = os.path.join(BASE_DIR, "quote_checker_frontend", "build")
-
-app = Flask(__name__,
-            static_folder=os.path.join("quote_checker_frontend", "build"),
-            static_url_path="/")
+app = Flask(__name__)
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_FILE_DIR'] = 'flask_session'
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -1267,24 +1262,6 @@ def delete_prebuilt_session():
     session.modified = True
     return jsonify({"success": True, "message": f"Deleted template '{name}'"})
 
-
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def serve(path):
-    """
-    Serves the React single-page app (SPA).
-    """
-    full_path = os.path.join(FRONTEND_BUILD_DIR, path)
-    log.info(f"Serving path={path}")
-
-    # Serve actual files if they exist in the build folder (e.g., manifest.json, logo192.png)
-    if path and os.path.exists(full_path):
-        log.info(f"Serving file: {full_path}")
-        return send_from_directory(FRONTEND_BUILD_DIR, path)
-
-    # Otherwise serve index.html for all other routes
-    return send_from_directory(FRONTEND_BUILD_DIR, "index.html")
-
 if __name__ == "__main__":
     # Run only in local dev
     print("Running locally, building partdb...")
@@ -1298,3 +1275,12 @@ if __name__ == "__main__":
         print(f"❌ build_partdb failed: {e}", flush=True)
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_react(path):
+    build_dir = os.path.join(os.path.dirname(__file__), "quote_checker_frontend", "build")
+    if path != "" and os.path.exists(os.path.join(build_dir, path)):
+        return send_from_directory(build_dir, path)
+    else:
+        return send_from_directory(build_dir, "index.html")
