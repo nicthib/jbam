@@ -13,7 +13,6 @@ instance/
 .env.*
 *.sqlite3
 *.db
-*.log
 *.pid
 *.bak
 *.swp
@@ -79,7 +78,6 @@ frontend/.env.test
 # ==========================================
 # COMMON IGNORE RULES
 # ==========================================
-*.log
 *.tmp
 *.temp
 *.bak
