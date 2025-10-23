@@ -1285,9 +1285,15 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 @app.route("/<path:path>")
-def serve_react(path):
-    build_dir = os.path.join(os.path.dirname(__file__), "quote_checker_frontend", "build")
-    if path != "" and os.path.exists(os.path.join(build_dir, path)):
+def serve_frontend(path):
+    # Don't intercept API requests
+    if path.startswith("api/"):
+        return "API route", 404
+
+    build_dir = app.static_folder
+    full_path = os.path.join(build_dir, path)
+
+    if path and os.path.exists(full_path):
         return send_from_directory(build_dir, path)
     else:
         return send_from_directory(build_dir, "index.html")
