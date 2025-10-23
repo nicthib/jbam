@@ -1280,7 +1280,16 @@ if __name__ == "__main__":
 @app.route("/<path:path>")
 def serve_react(path):
     build_dir = os.path.join(os.path.dirname(__file__), "quote_checker_frontend", "build")
-    if path != "" and os.path.exists(os.path.join(build_dir, path)):
+    full_path = os.path.join(build_dir, path)
+
+    # Serve real files if they exist anywhere inside build/
+    if os.path.isfile(full_path):
         return send_from_directory(build_dir, path)
-    else:
-        return send_from_directory(build_dir, "index.html")
+
+    # Serve static assets like /static/js/... even when nested
+    static_path = os.path.join(build_dir, "static", path.replace("static/", "", 1))
+    if path.startswith("static/") and os.path.isfile(static_path):
+        return send_from_directory(os.path.join(build_dir, "static"), path.replace("static/", "", 1))
+
+    # Otherwise fallback to index.html (for React Router etc.)
+    return send_from_directory(build_dir, "index.html")
