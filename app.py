@@ -71,7 +71,6 @@ def logout():
             f"[LOGOUT] Session {session.sid[-6:]} logged out at {logout_time}. "
             f"Session length: {session_duration:.2f} minutes."
         )
-        session.clear()
         return jsonify({"status": "Logged out"})
     return jsonify({"error": "Not logged in"}), 401
 
@@ -960,7 +959,6 @@ def load_pdf():
 @app.route("/api/clear", methods=["POST"])
 def clear_quote():
     try:
-        # session.clear()
         session['quote_network'] = []
         session['warnings_list'] = []
         session['next_uid'] = 1
