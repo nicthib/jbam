@@ -880,7 +880,6 @@ def init_session():
         session['quote_list'] = []
         session['custom_slots'] = []
         update_graph()
-        logging.info('[{}] Session {} initialized: adding part db'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:]))
     session.modified = True
         
 @app.route("/api/graph", methods=["GET"])

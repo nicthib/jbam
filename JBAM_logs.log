@@ -4,3 +4,6 @@
 2025-10-24 12:40:58 [INFO] [PDF_LOAD] Session zUaQwE loaded PDF 'TI2U.pdf' at 2025-10-24T16:40:58
 2025-10-24 12:41:09 [INFO] [REMOVE_ITEM] Session zUaQwE removed part MISC
 2025-10-24 12:43:23 [INFO] [LOGOUT] Session zUaQwE logged out at 2025-10-24 16:43:23.442565. Session length: 2.53 minutes.
+2025-10-24 13:27:03 [INFO] [10-24 13:27] Session StS0 initialized: adding part db
+2025-10-24 13:27:03 [INFO] [LOGIN] User session OeStS0 logged in at 2025-10-24 17:27:03.186348
+2025-10-24 13:27:05 [INFO] [LOGOUT] Session OeStS0 logged out at 2025-10-24 17:27:05.355933. Session length: 0.04 minutes.
