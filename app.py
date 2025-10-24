@@ -56,7 +56,7 @@ def login():
     if data and data.get("password") == app.config["PASSWORD"]:
         session["authenticated"] = True
         session["login_time"] = datetime.utcnow()
-        logger.info(f"[LOGIN] User session {session.sid[-6:]} logged in at {session['login_time']}")
+        logger.info(f"[LOGIN] User session {session.sid[-6:]} logged in")
         return jsonify({"status": "Logged in"})
     else:
         return jsonify({"error": "Invalid password"}), 401
@@ -68,8 +68,8 @@ def logout():
         login_time = session.get("login_time", logout_time)
         session_duration = (logout_time - login_time).total_seconds() / 60
         logger.info(
-            f"[LOGOUT] Session {session.sid[-6:]} logged out at {logout_time}. "
-            f"Session length: {session_duration:.2f} minutes."
+            f"[LOGOUT] Session {session.sid[-6:]} logged out. "
+            f"Session length: {session_duration:.1f} minutes."
         )
         return jsonify({"status": "Logged out"})
     return jsonify({"error": "Not logged in"}), 401
