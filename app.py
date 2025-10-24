@@ -36,12 +36,17 @@ app = Flask(
     static_folder="quote_checker_frontend/build",
     static_url_path=""
 )
-app.config["SESSION_TYPE"] = "filesystem"   # or "redis"
-app.config["SESSION_FILE_DIR"] = "./flask_sessions"
-app.config["SESSION_PERMANENT"] = True
-app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 24 * 30  # 30 days
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False
+SESSION_DIR = os.environ.get("RAILWAY_VOLUME_PATH", "/data/flask_sessions")
+os.makedirs(SESSION_DIR, exist_ok=True)
+
+app.config.update(
+    SESSION_TYPE="filesystem",
+    SESSION_FILE_DIR=SESSION_DIR,
+    SESSION_PERMANENT=True,
+    PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,  # 30 days
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,
+)
 app.config['PASSWORD'] = 'happy'
 app.secret_key = '2' # update if cookies are stale
 
