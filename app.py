@@ -11,18 +11,25 @@ from datetime import datetime
 from io import BytesIO
 from collections import defaultdict
 
-logging.basicConfig(
-    filename='JBAM_logs.log',
-    filemode='a',
-    format='%(message)s',
-    level=logging.INFO
-)
-def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
-    if issubclass(exc_type, KeyboardInterrupt):
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        return
-    logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
-sys.excepthook = log_uncaught_exceptions
+# Used for waitress deploy
+# logging.basicConfig(
+#     filename='JBAM_logs.log',
+#     filemode='a',
+#     format='%(message)s',
+#     level=logging.INFO
+# )
+
+log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(log_formatter)
+
+file_handler = logging.FileHandler("JBAM_logs.log", mode="a")
+file_handler.setFormatter(log_formatter)
+
+logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler])
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 app = Flask(
     __name__,
@@ -39,11 +46,27 @@ app.secret_key = '2' # update if cookies are stale
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
-    if data and data.get("password") == app.config['PASSWORD']:
-        session['authenticated'] = True
+    if data and data.get("password") == app.config["PASSWORD"]:
+        session["authenticated"] = True
+        session["login_time"] = datetime.utcnow()
+        logger.info(f"[LOGIN] User session {session.sid[-6:]} logged in at {session['login_time']}")
         return jsonify({"status": "Logged in"})
     else:
         return jsonify({"error": "Invalid password"}), 401
+
+@app.route("/api/logout", methods=["POST"])
+def logout():
+    if session.get("authenticated"):
+        logout_time = datetime.utcnow()
+        login_time = session.get("login_time", logout_time)
+        session_duration = (logout_time - login_time).total_seconds() / 60
+        logger.info(
+            f"[LOGOUT] Session {session.sid[-6:]} logged out at {logout_time}. "
+            f"Session length: {session_duration:.2f} minutes."
+        )
+        session.clear()
+        return jsonify({"status": "Logged out"})
+    return jsonify({"error": "Not logged in"}), 401
 
 # Protect API endpoints
 @app.before_request
@@ -55,7 +78,7 @@ def require_auth():
         if not session.get('authenticated'):
             return jsonify({"error": "Not authorized"}), 401
 
-CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://publicationexplorer.com","https://jbam-production.up.railway.app/"]}})
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": ["http://localhost:3000", "https://publicationexplorer.com","https://jbam.up.railway.app/"]}})
 Session(app)
 G = nx.DiGraph()
 part_db = []
@@ -247,14 +270,11 @@ def extract_from_pdf(pdf_input):
         pdf_input.seek(0)
         file_bytes = pdf_input.read()
 
-    session["Notebook"] = []
     try:
-        session["Notebook"].append(f"Opened PDF: {pdf_input.filename}")
-        logging.info("[{}] Session {} opened {}".format(
-            datetime.now().strftime("%m-%d %H:%M"),
-            session.sid[-4:],
-            pdf_input.filename
-        ))
+        logger.info(
+            f"[PDF_LOAD] Session {session.sid[-6:]} loaded PDF '{pdf_input.filename}' "
+            f"at {datetime.utcnow().isoformat(timespec='seconds')}"
+        )
     except Exception:
         pass
 
@@ -306,8 +326,6 @@ def extract_from_pdf(pdf_input):
                 "uid": uid
             })
     return parsed_items
-
-
 
 def check_slots():
     empty_slots = 0
@@ -853,7 +871,6 @@ def init_session():
         session['next_uid'] = 1
         session['active_status'] = {}
         session['graph'] = []
-        session['Notebook'] = []
         session['quote_list'] = []
         session['custom_slots'] = []
         update_graph()
@@ -893,18 +910,10 @@ def add_item():
         session['active_status'][session['next_uid']] = True
         session['next_uid'] += 1
         session['quote_list'].append(new_item)
-        session['Notebook'].append(f"Added {item_id} - {desc}")
-        logging.info(
-            "[{}] Session {} added part {}".format(
-                datetime.now().strftime("%m-%d %H:%M"),
-                session.sid[-4:],
-                item_id
-            )
-        )
+        logger.info(f"[ADD_ITEM] Session {session.sid[-6:]} added part {new_item['ID']}")
 
     update_graph()
     return jsonify(graph_to_json())
-
 
 @app.route("/api/remove_item", methods=["POST"])
 def remove_item():
@@ -919,8 +928,7 @@ def remove_item():
             continue
         new_quote_list.append(item)
     session['quote_list'] = new_quote_list
-    session['Notebook'].append('Removed {} - {}'.format(item_to_remove,desc))
-    logging.info('[{}] Session {} removed part {}'.format(datetime.now().strftime('%m-%d %H:%M'),session.sid[-4:],item_to_remove))
+    logger.info(f"[REMOVE_ITEM] Session {session.sid[-6:]} removed part {item_to_remove}")
     session.modified = True
     update_graph()
     return jsonify(graph_to_json())
@@ -952,7 +960,6 @@ def clear_quote():
         session['active_status'] = {}
         session['quote_list'] = []
         session['graph'] = []
-        session['Notebook'] = []
         session.modified = True
         update_graph()
         return jsonify(graph_to_json())

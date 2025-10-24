@@ -153,21 +153,31 @@ export default function NetworkGraph() {
   }, [isLoggedIn]);
 
   useEffect(() => {
-  if (isLoggedIn) {
-    Promise.all([
-      fetch("/api/prebuilts", { credentials: "include" }).then((r) => r.json()),
-      fetch("/api/session_prebuilts", { credentials: "include" }).then((r) => r.json()),
-    ])
-      .then(([global, session]) => {
-        setPrebuiltList({
-          global: global.prebuilts || [],
-          session: session.prebuilts || [],
-        });
-      })
-      .catch(console.error);
-  }
-}, [isLoggedIn, showSaveTemplateModal]);
+    if (isLoggedIn) {
+      Promise.all([
+        fetch("/api/prebuilts", { credentials: "include" }).then((r) => r.json()),
+        fetch("/api/session_prebuilts", { credentials: "include" }).then((r) => r.json()),
+      ])
+        .then(([global, session]) => {
+          setPrebuiltList({
+            global: global.prebuilts || [],
+            session: session.prebuilts || [],
+          });
+        })
+        .catch(console.error);
+    }
+  }, [isLoggedIn, showSaveTemplateModal]);
 
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (isLoggedIn) {
+        navigator.sendBeacon("/api/logout");
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isLoggedIn]);
+  
   useEffect(() => {
     if (showCustomModal && pendingCustomEdge) {
       Promise.all([
