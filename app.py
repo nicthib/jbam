@@ -36,8 +36,10 @@ app = Flask(
     static_folder="quote_checker_frontend/build",
     static_url_path=""
 )
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_FILE_DIR'] = 'flask_session'
+app.config["SESSION_TYPE"] = "filesystem"   # or "redis"
+app.config["SESSION_FILE_DIR"] = "./flask_sessions"
+app.config["SESSION_PERMANENT"] = True
+app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 24 * 30  # 30 days
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = False
 app.config['PASSWORD'] = 'happy'
